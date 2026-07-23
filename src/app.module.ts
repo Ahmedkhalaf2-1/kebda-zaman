@@ -13,6 +13,10 @@ import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
+import { PricingModule } from './modules/pricing/pricing.module';
+import { SettingsModule } from './modules/settings/settings.module';
+import { CartModule } from './modules/cart/cart.module';
+import { PromosModule } from './modules/promos/promos.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -87,6 +91,10 @@ import { RolesGuard } from './common/guards/roles.guard';
     AuthModule,
     UsersModule,
     CatalogModule,
+    PricingModule,
+    SettingsModule,
+    CartModule,
+    PromosModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.

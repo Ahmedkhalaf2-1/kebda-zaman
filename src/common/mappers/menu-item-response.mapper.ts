@@ -46,6 +46,23 @@ export interface MenuItemResponseDto {
   addonGroups: AddonGroupResponseDto[];
 }
 
+/** Only active variants / available addons are exposed publicly (catalog + cart hydration). */
+export const PUBLIC_MENU_ITEM_INCLUDE = {
+  variants: {
+    where: { isActive: true },
+    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+  },
+  addonGroups: {
+    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+    include: {
+      addons: {
+        where: { isAvailable: true },
+        orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
+      },
+    },
+  },
+} satisfies Prisma.MenuItemInclude;
+
 export type MenuItemWithRelations = Prisma.MenuItemGetPayload<{
   include: {
     variants: true;

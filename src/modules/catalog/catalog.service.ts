@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   CategoryResponseDto,
@@ -7,29 +6,14 @@ import {
 } from '../../common/mappers/category-response.mapper';
 import {
   MenuItemResponseDto,
+  PUBLIC_MENU_ITEM_INCLUDE,
   toMenuItemResponse,
 } from '../../common/mappers/menu-item-response.mapper';
 import { ListMenuItemsDto } from './dto/list-menu-items.dto';
 import { SearchMenuDto } from './dto/search-menu.dto';
 
 const FEATURED_LIMIT = 10;
-
-/** Only active variants / available addons are exposed to the public catalog. */
-const menuItemInclude = {
-  variants: {
-    where: { isActive: true },
-    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-  },
-  addonGroups: {
-    orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-    include: {
-      addons: {
-        where: { isAvailable: true },
-        orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
-      },
-    },
-  },
-} satisfies Prisma.MenuItemInclude;
+const menuItemInclude = PUBLIC_MENU_ITEM_INCLUDE;
 
 @Injectable()
 export class CatalogService {
