@@ -18,3 +18,12 @@ export function toCategoryResponse(category: Category): CategoryResponseDto {
     displayOrder: category.displayOrder,
   };
 }
+
+/** Admin view: adds isActive, which the public catalog never exposes (it only ever lists active ones). */
+export interface AdminCategoryResponseDto extends CategoryResponseDto {
+  isActive: boolean;
+}
+
+export function toAdminCategoryResponse(category: Category): AdminCategoryResponseDto {
+  return { ...toCategoryResponse(category), isActive: category.isActive };
+}
