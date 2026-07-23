@@ -18,6 +18,8 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { CartModule } from './modules/cart/cart.module';
 import { PromosModule } from './modules/promos/promos.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { DevicesModule } from './modules/devices/devices.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -97,6 +99,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     CartModule,
     PromosModule,
     OrdersModule,
+    NotificationsModule,
+    DevicesModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.

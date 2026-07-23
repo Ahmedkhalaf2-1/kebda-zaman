@@ -21,6 +21,11 @@ export const validationSchema = Joi.object({
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),
   BRUTE_FORCE_MAX_ATTEMPTS: Joi.number().integer().min(1).default(5),
   BRUTE_FORCE_LOCK_MINUTES: Joi.number().integer().min(1).default(15),
+  // Optional: FCM sending is disabled (safe no-op) when neither is set, so
+  // local/test environments never need real Firebase credentials to boot.
+  FIREBASE_PROJECT_ID: Joi.string().allow('').default('keebda-zaman'),
+  FIREBASE_SERVICE_ACCOUNT_PATH: Joi.string().allow('').optional(),
+  FIREBASE_SERVICE_ACCOUNT_JSON: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true);

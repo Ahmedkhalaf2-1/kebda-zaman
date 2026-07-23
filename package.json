@@ -25,6 +25,7 @@
     "test:catalog": "jest --config ./test/jest-catalog.json",
     "test:cart": "jest --config ./test/jest-cart.json",
     "test:orders": "jest --config ./test/jest-orders.json",
+    "test:devices": "jest --config ./test/jest-devices.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed"
@@ -44,6 +45,7 @@
     "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "firebase-admin": "^14.2.0",
     "helmet": "^8.0.0",
     "joi": "^17.13.3",
     "nestjs-pino": "^4.3.0",

@@ -21,6 +21,14 @@ export interface AppConfig {
     maxAttempts: number;
     lockMinutes: number;
   };
+  firebase: {
+    projectId: string;
+    // At most one of these is normally set; when neither is, FCM sending is
+    // disabled (safe no-op) rather than the app failing to boot — required
+    // for local/test environments with no Firebase credentials configured.
+    serviceAccountPath?: string;
+    serviceAccountJson?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -44,5 +52,10 @@ export default (): AppConfig => ({
   bruteForce: {
     maxAttempts: parseInt(process.env.BRUTE_FORCE_MAX_ATTEMPTS ?? '5', 10),
     lockMinutes: parseInt(process.env.BRUTE_FORCE_LOCK_MINUTES ?? '15', 10),
+  },
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID ?? 'keebda-zaman',
+    serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || undefined,
+    serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || undefined,
   },
 });
