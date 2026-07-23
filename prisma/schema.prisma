@@ -1,7 +1,14 @@
 // Kebda Zaman — Prisma schema
-// PHASE 0: foundation only. Intentionally contains NO domain models.
-// Domain entities (User, MenuItem, Order, Cart, Payment, ...) are introduced in Phase 1.
-// The readiness health check uses a raw `SELECT 1`, which requires no tables.
+// PHASE 1: database foundation. Models the P0 entities required by
+// BACKEND_IMPLEMENTATION_PLAN.md §2 (Database Design Plan) and §14 (Phase 1).
+//
+// Scope note: `PromoCode` is included as a minimal stub (fields copied verbatim
+// from plan §2.15) solely because Order.appliedPromoId / Cart.appliedPromoId are
+// hard-specified FKs on the two core Phase-1 entities (§2.9, §2.11) — this is the
+// "+ P1 stubs where cheap" case anticipated in §14. No promo business logic exists
+// here. Address, Favorite, LoyaltyAccount, NotificationCampaign are deferred to
+// their respective phases: no Phase-1-required entity holds a hard FK to any of
+// them (Order's delivery address is a JSONB snapshot, not a live FK).
 
 generator client {
   provider = "prisma-client-js"
@@ -10,4 +17,459 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum DeliveryMethod {
+  DELIVERY
+  PICKUP
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+enum OrderItemCustomizationKind {
+  VARIANT
+  ADDON
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+  MACOS
+  WINDOWS
+}
+
+// ---------------------------------------------------------------------------
+// Identity & sessions (plan §2.1, §2.2)
+// ---------------------------------------------------------------------------
+
+/// Account identity, auth, role. Plan §2.1.
+model User {
+  id                  String    @id @default(uuid()) @db.Uuid
+  // Nullable to allow guest users; uniqueness among active accounts is enforced
+  // by a partial unique index added via raw SQL in the migration (Prisma's schema
+  // DSL cannot express `WHERE deletedAt IS NULL AND email IS NOT NULL`).
+  email               String?
+  passwordHash        String?
+  fullName            String
+  phone               String?
+  avatarUrl           String?
+  role                UserRole  @default(CUSTOMER)
+  isGuest             Boolean   @default(false)
+  locale              String    @default("en")
+  onboardingCompleted Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  refreshTokens RefreshToken[]
+  orders        Order[]
+  deviceTokens  DeviceToken[]
+  /// One active cart per user (Cart.userId is unique) — guest carts have userId = null.
+  cart          Cart?
+  statusChanges OrderStatusHistory[]
+
+  @@index([email])
+  @@index([role])
+}
+
+/// Refresh-token rotation + multi-device sessions + logout/revocation. Plan §2.2.
+model RefreshToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique
+  familyId          String    @db.Uuid
+  userAgent         String?
+  ip                String?
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?
+  createdAt         DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+// ---------------------------------------------------------------------------
+// Catalog (plan §2.4 - §2.8)
+// ---------------------------------------------------------------------------
+
+/// Plan §2.4.
+model Category {
+  id           String    @id @default(uuid()) @db.Uuid
+  nameAr       String
+  nameEn       String
+  iconUrl      String?
+  displayOrder Int       @default(0)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  menuItems MenuItem[]
+
+  @@index([displayOrder])
+  @@index([isActive])
+}
+
+/// Plan §2.5. Referenced by OrderItem only via a soft (non-FK) snapshot reference.
+model MenuItem {
+  id            String    @id @default(uuid()) @db.Uuid
+  categoryId    String    @db.Uuid
+  nameAr        String
+  nameEn        String
+  descriptionAr String    @db.Text
+  descriptionEn String    @db.Text
+  basePrice     Decimal   @db.Decimal(10, 2)
+  imageUrl      String
+  isAvailable   Boolean   @default(true)
+  isPopular     Boolean   @default(false)
+  displayOrder  Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants    ItemVariant[]
+  addonGroups AddonGroup[]
+  cartItems   CartItem[]
+
+  @@index([categoryId])
+  @@index([isAvailable])
+  @@index([isPopular])
+}
+
+/// Size/variant with a price delta. Plan §2.6.
+model ItemVariant {
+  id           String   @id @default(uuid()) @db.Uuid
+  menuItemId   String   @db.Uuid
+  nameAr       String
+  nameEn       String
+  priceDelta   Decimal  @default(0) @db.Decimal(10, 2)
+  isDefault    Boolean  @default(false)
+  displayOrder Int?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  menuItem  MenuItem   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  cartItems CartItem[]
+
+  @@index([menuItemId])
+}
+
+/// Plan §2.7. minSelect/maxSelect invariants are enforced at the pricing/checkout
+/// service layer (not at the DB), per the plan's explicit note.
+model AddonGroup {
+  id           String   @id @default(uuid()) @db.Uuid
+  menuItemId   String   @db.Uuid
+  titleAr      String
+  titleEn      String
+  isRequired   Boolean  @default(false)
+  minSelect    Int      @default(0)
+  maxSelect    Int      @default(1)
+  displayOrder Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  addons   Addon[]
+
+  @@index([menuItemId])
+}
+
+/// Plan §2.8.
+model Addon {
+  id           String   @id @default(uuid()) @db.Uuid
+  addonGroupId String   @db.Uuid
+  nameAr       String
+  nameEn       String
+  price        Decimal  @default(0) @db.Decimal(10, 2)
+  isAvailable  Boolean  @default(true)
+  displayOrder Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  addonGroup     AddonGroup      @relation(fields: [addonGroupId], references: [id], onDelete: Cascade)
+  cartItemAddons CartItemAddon[]
+
+  @@index([addonGroupId])
+}
+
+// ---------------------------------------------------------------------------
+// Promotions — minimal stub (see scope note at top of file). Plan §2.15.
+// ---------------------------------------------------------------------------
+
+model PromoCode {
+  id                String       @id @default(uuid()) @db.Uuid
+  code              String       @unique
+  discountType      DiscountType
+  value             Decimal      @db.Decimal(10, 2)
+  minOrderAmount    Decimal?     @db.Decimal(10, 2)
+  maxDiscountAmount Decimal?     @db.Decimal(10, 2)
+  maxUsage          Int?
+  usageCount        Int          @default(0)
+  perUserLimit      Int?
+  startsAt          DateTime?
+  expiresAt         DateTime?
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  deletedAt         DateTime?
+
+  carts  Cart[]
+  orders Order[]
+}
+
+// ---------------------------------------------------------------------------
+// Cart (plan §2.9, §2.10)
+// ---------------------------------------------------------------------------
+
+/// Server-side persistent cart, one active cart per user. Plan §2.9.
+/// deliveryFee/taxRate are intentionally NOT stored here — they are read from
+/// RestaurantSettings at pricing time so the client can never influence them.
+model Cart {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String?  @unique @db.Uuid
+  appliedPromoId String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appliedPromo PromoCode? @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
+  items        CartItem[]
+}
+
+/// A configured cart line (item + variant + addons + qty). Plan §2.10.
+/// unitPrice/totalPrice are computed server-side on read, never stored here.
+model CartItem {
+  id                  String   @id @default(uuid()) @db.Uuid
+  cartId              String   @db.Uuid
+  menuItemId          String   @db.Uuid
+  selectedVariantId   String?  @db.Uuid
+  quantity            Int
+  specialInstructions String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  cart            Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  menuItem        MenuItem        @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  selectedVariant ItemVariant?    @relation(fields: [selectedVariantId], references: [id], onDelete: SetNull)
+  addons          CartItemAddon[]
+
+  @@index([cartId])
+  @@index([menuItemId])
+}
+
+/// Join table for a CartItem's selected addons. Plan §2.10.
+model CartItemAddon {
+  id         String @id @default(uuid()) @db.Uuid
+  cartItemId String @db.Uuid
+  addonId    String @db.Uuid
+
+  cartItem CartItem @relation(fields: [cartItemId], references: [id], onDelete: Cascade)
+  addon    Addon    @relation(fields: [addonId], references: [id], onDelete: Restrict)
+
+  @@unique([cartItemId, addonId])
+  @@index([cartItemId])
+  @@index([addonId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders (plan §2.11 - §2.13, §2.21)
+// ---------------------------------------------------------------------------
+
+/// Plan §2.11. Never hard-deleted.
+model Order {
+  id                    String         @id @default(uuid()) @db.Uuid
+  orderNumber           String         @unique
+  userId                String         @db.Uuid
+  status                OrderStatus    @default(PENDING)
+  subtotal              Decimal        @db.Decimal(10, 2)
+  deliveryFee           Decimal        @db.Decimal(10, 2)
+  tax                   Decimal        @db.Decimal(10, 2)
+  discount              Decimal        @db.Decimal(10, 2)
+  totalAmount           Decimal        @db.Decimal(10, 2)
+  deliveryMethod        DeliveryMethod
+  paymentMethod         PaymentMethod
+  paymentStatus         PaymentStatus  @default(PENDING)
+  appliedPromoId        String?        @db.Uuid
+  promoCodeSnapshot     String?
+  // Address snapshot at checkout time — decouples the order from later edits/
+  // deletes of the customer's saved addresses (Address entity is Phase 2+).
+  deliveryAddressJson   Json
+  estimatedDeliveryTime DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  cancelledAt           DateTime?
+  cancelReason          String?
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appliedPromo  PromoCode?           @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  payments      Payment[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Plan §2.12. Snapshot row — no updatedAt (immutable once created).
+/// menuItemId is a soft reference (plain UUID, not an FK) so catalog deletes
+/// never orphan order history.
+model OrderItem {
+  id                  String   @id @default(uuid()) @db.Uuid
+  orderId             String   @db.Uuid
+  menuItemId          String?  @db.Uuid
+  quantity            Int
+  unitPrice           Decimal  @db.Decimal(10, 2)
+  lineTotal           Decimal  @db.Decimal(10, 2)
+  specialInstructions String?
+  nameArSnapshot      String
+  nameEnSnapshot      String
+  imageUrlSnapshot    String?
+  createdAt           DateTime @default(now())
+
+  order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customizations OrderItemCustomization[]
+
+  @@index([orderId])
+}
+
+/// Immutable snapshot of a chosen variant/addon at order time. Plan §2.13.
+/// refId is a soft reference (plain UUID, not an FK) to the original variant/addon.
+model OrderItemCustomization {
+  id             String                     @id @default(uuid()) @db.Uuid
+  orderItemId    String                     @db.Uuid
+  kind           OrderItemCustomizationKind
+  refId          String?                    @db.Uuid
+  nameArSnapshot String
+  nameEnSnapshot String
+  priceSnapshot  Decimal                    @db.Decimal(10, 2)
+  createdAt      DateTime                   @default(now())
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([orderItemId])
+}
+
+/// Powers the customer tracking timeline + admin audit trail. Plan §2.21.
+model OrderStatusHistory {
+  id              String       @id @default(uuid()) @db.Uuid
+  orderId         String       @db.Uuid
+  fromStatus      OrderStatus?
+  toStatus        OrderStatus
+  changedByUserId String?      @db.Uuid
+  note            String?
+  createdAt       DateTime     @default(now())
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByUser User? @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// Payments (plan §2.14)
+// ---------------------------------------------------------------------------
+
+/// Gateway-agnostic payment record. Plan §2.14. No gateway integration in Phase 1.
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  orderId        String        @db.Uuid
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String
+  provider       String?
+  providerRef    String?
+  idempotencyKey String        @unique
+  rawWebhookJson Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([providerRef])
+}
+
+// ---------------------------------------------------------------------------
+// Device tokens (plan §2.17)
+// ---------------------------------------------------------------------------
+
+/// FCM token registry — multi-device, guest-tolerant. Plan §2.17.
+model DeviceToken {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String?        @db.Uuid
+  token      String         @unique
+  platform   DevicePlatform
+  lastSeenAt DateTime
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// Restaurant settings (plan §2.19)
+// ---------------------------------------------------------------------------
+
+/// Single authoritative source for delivery fee, tax rate, min order. Plan §2.19.
+/// Singleton enforced via the unique `singleton` marker column (always `true`),
+/// which Postgres allows at most one row to satisfy.
+model RestaurantSettings {
+  id                String   @id @default(uuid()) @db.Uuid
+  singleton         Boolean  @unique @default(true)
+  restaurantName    String
+  phone             String
+  addressText       String
+  taxRatePercent    Decimal  @db.Decimal(10, 2)
+  deliveryFee       Decimal  @db.Decimal(10, 2)
+  minOrderAmount    Decimal  @db.Decimal(10, 2)
+  currency          String
+  workingHours      Json
+  isMaintenanceMode Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
 }
