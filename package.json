@@ -26,6 +26,7 @@
     "test:cart": "jest --config ./test/jest-cart.json",
     "test:orders": "jest --config ./test/jest-orders.json",
     "test:devices": "jest --config ./test/jest-devices.json",
+    "test:admin-orders": "jest --config ./test/jest-admin-orders.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed"

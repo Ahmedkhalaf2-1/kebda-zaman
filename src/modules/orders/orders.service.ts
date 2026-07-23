@@ -3,14 +3,16 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   OrderResponseDto,
   OrderStatusResponseDto,
@@ -21,6 +23,7 @@ import {
 } from '../../common/mappers/order-response.mapper';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
+import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
 
 const orderInclude = {
   user: true,
@@ -29,13 +32,26 @@ const orderInclude = {
 
 const MAX_ORDER_NUMBER_ATTEMPTS = 5;
 
+/** Forward transitions + cancellation rules (plan §7.5). No READY: see D2a. */
+const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  PENDING: ['CONFIRMED', 'CANCELLED'],
+  CONFIRMED: ['PREPARING', 'CANCELLED'],
+  PREPARING: ['OUT_FOR_DELIVERY', 'CANCELLED'],
+  OUT_FOR_DELIVERY: ['DELIVERED', 'CANCELLED'],
+  DELIVERED: [],
+  CANCELLED: [],
+};
+
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
     private readonly pricingService: PricingService,
     private readonly settingsService: SettingsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /**
@@ -251,6 +267,101 @@ export class OrdersService {
       statusHistory: order.statusHistory.map(toStatusHistoryEntry),
       estimatedDeliveryTime: order.estimatedDeliveryTime?.toISOString() ?? null,
     };
+  }
+
+  /** ADMIN: every order, optionally filtered by status / free-text search. */
+  async adminListOrders(query: AdminListOrdersDto): Promise<OrderResponseDto[]> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const orders = await this.prisma.order.findMany({
+      where: {
+        ...(query.status ? { status: FRONTEND_STATUS_TO_ORDER_STATUS[query.status] } : {}),
+        ...(query.q
+          ? {
+              OR: [
+                { orderNumber: { contains: query.q, mode: 'insensitive' } },
+                { user: { fullName: { contains: query.q, mode: 'insensitive' } } },
+                { user: { email: { contains: query.q, mode: 'insensitive' } } },
+              ],
+            }
+          : {}),
+      },
+      include: orderInclude,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return orders.map(toOrderResponse);
+  }
+
+  /** ADMIN: no ownership restriction — any order. */
+  async adminGetOrder(orderId: string): Promise<OrderResponseDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: orderInclude,
+    });
+    if (!order) {
+      throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+    }
+    return toOrderResponse(order);
+  }
+
+  /**
+   * ADMIN status transition (plan §7.5). Validates against the allowed
+   * transition map, writes the order update + OrderStatusHistory row in one
+   * transaction, then fires the Phase 6 notification infrastructure
+   * *after* that commit — a notification failure is logged, never allowed
+   * to roll back or fail the already-committed status change.
+   */
+  async updateOrderStatus(
+    orderId: string,
+    newStatus: OrderStatus,
+    adminUserId: string,
+    note?: string,
+  ): Promise<OrderResponseDto> {
+    const existing = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!existing) {
+      throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+    }
+
+    if (!ALLOWED_TRANSITIONS[existing.status].includes(newStatus)) {
+      throw new UnprocessableEntityException({
+        message: `Cannot transition order from ${existing.status} to ${newStatus}`,
+        code: 'INVALID_STATUS_TRANSITION',
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.order.update({
+        where: { id: orderId },
+        data: { status: newStatus },
+        include: orderInclude,
+      });
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          fromStatus: existing.status,
+          toStatus: newStatus,
+          changedByUserId: adminUserId,
+          note: note ?? null,
+        },
+      });
+      return result;
+    });
+
+    try {
+      await this.notificationsService.sendOrderStatusNotification({
+        id: updated.id,
+        userId: updated.userId,
+        status: updated.status,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Order-status notification failed for order ${orderId} (status change already committed): ${(error as Error).message}`,
+      );
+    }
+
+    return toOrderResponse(updated);
   }
 
   private generateOrderNumber(): string {

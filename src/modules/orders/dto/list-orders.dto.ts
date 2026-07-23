@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Min } from 'class-validator';
 
-const FRONTEND_STATUSES = [
+export const FRONTEND_STATUSES = [
   'pending',
   'confirmed',
   'preparing',
