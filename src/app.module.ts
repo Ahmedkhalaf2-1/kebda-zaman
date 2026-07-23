@@ -12,6 +12,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './modules/health/health.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -85,6 +86,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     HealthModule,
     AuthModule,
     UsersModule,
+    CatalogModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.
