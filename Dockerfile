@@ -9,7 +9,10 @@ RUN apk add --no-cache openssl
 WORKDIR /app
 
 # --- deps: full dependency install + Prisma client generation ---------------
+# python3/make/g++ are needed only here: argon2 ships no musl (Alpine) prebuild,
+# so node-gyp-build compiles it from source. Not carried into `runtime`.
 FROM base AS deps
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci
 COPY prisma ./prisma
@@ -23,6 +26,7 @@ RUN npm run build
 
 # --- prod-deps: production-only node_modules (+ generated Prisma client) -----
 FROM base AS prod-deps
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY prisma ./prisma

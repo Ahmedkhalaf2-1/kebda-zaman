@@ -7,3 +7,6 @@ try {
 } catch {
   // No .env file found — assume DATABASE_URL is already set in the environment.
 }
+
+// Keep test output focused on Jest's own reporting, not per-request access logs.
+process.env.LOG_LEVEL ??= 'silent';

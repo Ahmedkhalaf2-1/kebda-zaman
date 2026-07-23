@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
+import { Public } from '../../common/decorators/public.decorator';
 import { PrismaHealthIndicator } from './prisma.health';
 
 /**
@@ -7,7 +8,10 @@ import { PrismaHealthIndicator } from './prisma.health';
  *
  *  - GET /api/v1/health        Liveness: the process is up. No external deps.
  *  - GET /api/v1/health/ready  Readiness: includes a real PostgreSQL ping.
+ *
+ * Public: must remain reachable without an access token (load balancer/orchestrator probes).
  */
+@Public()
 @Controller({ path: 'health', version: '1' })
 export class HealthController {
   constructor(

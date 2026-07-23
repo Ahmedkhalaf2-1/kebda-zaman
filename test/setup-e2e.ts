@@ -4,3 +4,4 @@ process.env.NODE_ENV ??= 'test';
 process.env.DATABASE_URL ??= 'postgresql://test:test@localhost:5432/kebda_zaman_test?schema=public';
 process.env.CORS_ORIGINS ??= '';
 process.env.LOG_LEVEL ??= 'silent';
+process.env.JWT_ACCESS_SECRET ??= 'test-only-secret-not-for-real-use-0123456789abcdef';
