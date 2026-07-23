@@ -48,6 +48,9 @@ export interface FullPriceBreakdown {
   deliveryFee: Prisma.Decimal;
   totalAmount: Prisma.Decimal;
   currency: string;
+  /** The resolved promo, when a code was applied — needed by checkout to
+   * persist appliedPromoId/promoCodeSnapshot and to guard usageCount. */
+  promo: PromoCode | null;
 }
 
 function round2(value: Prisma.Decimal): Prisma.Decimal {
@@ -279,9 +282,11 @@ export class PricingService {
     const { lines, subtotal } = await this.priceLines(inputs);
 
     let discount = new Prisma.Decimal(0);
+    let promo: PromoCode | null = null;
     if (promoCode) {
       const evaluation = await this.evaluatePromo(promoCode, subtotal);
       discount = evaluation.discount;
+      promo = evaluation.promo;
     }
 
     const discountedSubtotal = subtotal.minus(discount);
@@ -298,6 +303,7 @@ export class PricingService {
       deliveryFee,
       totalAmount,
       currency: settings.currency,
+      promo,
     };
   }
 }

@@ -17,6 +17,7 @@ import { PricingModule } from './modules/pricing/pricing.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { CartModule } from './modules/cart/cart.module';
 import { PromosModule } from './modules/promos/promos.module';
+import { OrdersModule } from './modules/orders/orders.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -95,6 +96,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     SettingsModule,
     CartModule,
     PromosModule,
+    OrdersModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.

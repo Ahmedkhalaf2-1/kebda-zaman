@@ -12,7 +12,7 @@ import {
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 
-type CartItemWithAddons = CartItem & { addons: CartItemAddon[] };
+export type CartItemWithAddons = CartItem & { addons: CartItemAddon[] };
 
 @Injectable()
 export class CartService {
@@ -52,6 +52,16 @@ export class CartService {
   async getCartLineInputs(userId: string): Promise<CartLineInput[]> {
     const cart = await this.getOrCreateCart(userId);
     return this.toInputs(await this.loadItems(cart.id));
+  }
+
+  /** Used by OrdersService at checkout: raw cart rows (for specialInstructions
+   * snapshots) alongside the pricing inputs, both in the same line order. */
+  async getCartForCheckout(
+    userId: string,
+  ): Promise<{ cartId: string; items: CartItemWithAddons[]; inputs: CartLineInput[] }> {
+    const cart = await this.getOrCreateCart(userId);
+    const items = await this.loadItems(cart.id);
+    return { cartId: cart.id, items, inputs: this.toInputs(items) };
   }
 
   private async buildResponse(
