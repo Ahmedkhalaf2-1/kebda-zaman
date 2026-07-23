@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+.vscode
+.idea
+Dockerfile
+docker-compose.yml
+README.md
+BACKEND_IMPLEMENTATION_PLAN.md
+PROJECT_CURRENT_STATE_AUDIT.md

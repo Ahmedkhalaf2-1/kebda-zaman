@@ -1,0 +1,26 @@
+# Dependencies
+/node_modules
+
+# Build output
+/dist
+/coverage
+*.tsbuildinfo
+
+# Environment & secrets — NEVER commit real values
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Firebase service account credentials (backend-only, must never be committed)
+firebase-service-account*.json
+serviceAccount*.json
+
+# Logs
+*.log
+logs
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode

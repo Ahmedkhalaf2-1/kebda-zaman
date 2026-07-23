@@ -1,0 +1,13 @@
+// Kebda Zaman — Prisma schema
+// PHASE 0: foundation only. Intentionally contains NO domain models.
+// Domain entities (User, MenuItem, Order, Cart, Payment, ...) are introduced in Phase 1.
+// The readiness health check uses a raw `SELECT 1`, which requires no tables.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

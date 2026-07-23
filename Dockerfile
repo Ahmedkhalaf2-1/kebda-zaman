@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+# ---------------------------------------------------------------------------
+# Kebda Zaman Backend — production-ready multi-stage build
+# Pinned to Node 22 LTS (Alpine). openssl is required by Prisma's engine.
+# ---------------------------------------------------------------------------
+
+FROM node:22-alpine AS base
+RUN apk add --no-cache openssl
+WORKDIR /app
+
+# --- deps: full dependency install + Prisma client generation ---------------
+FROM base AS deps
+COPY package*.json ./
+RUN npm ci
+COPY prisma ./prisma
+RUN npx prisma generate
+
+# --- build: compile TypeScript -> dist --------------------------------------
+FROM deps AS build
+COPY tsconfig*.json nest-cli.json ./
+COPY src ./src
+RUN npm run build
+
+# --- prod-deps: production-only node_modules (+ generated Prisma client) -----
+FROM base AS prod-deps
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY prisma ./prisma
+RUN npx prisma generate
+
+# --- runtime: minimal image, non-root ---------------------------------------
+FROM base AS runtime
+ENV NODE_ENV=production
+RUN apk add --no-cache curl \
+  && addgroup -S app && adduser -S app -G app
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=prod-deps /app/prisma ./prisma
+COPY package*.json ./
+USER app
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:3000/api/v1/health || exit 1
+CMD ["node", "dist/main.js"]
