@@ -13,6 +13,7 @@ import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PaymentsService } from '../payments/payments.service';
 import {
   OrderResponseDto,
   OrderStatusResponseDto,
@@ -52,6 +53,7 @@ export class OrdersService {
     private readonly pricingService: PricingService,
     private readonly settingsService: SettingsService,
     private readonly notificationsService: NotificationsService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   /**
@@ -348,6 +350,16 @@ export class OrdersService {
       });
       return result;
     });
+
+    if (newStatus === 'DELIVERED') {
+      try {
+        await this.paymentsService.settleCashOnDelivery(orderId);
+      } catch (error) {
+        this.logger.warn(
+          `COD settlement failed for order ${orderId} (status change already committed): ${(error as Error).message}`,
+        );
+      }
+    }
 
     try {
       await this.notificationsService.sendOrderStatusNotification({
