@@ -14,6 +14,7 @@ import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 import {
   OrderResponseDto,
   OrderStatusResponseDto,
@@ -54,6 +55,7 @@ export class OrdersService {
     private readonly settingsService: SettingsService,
     private readonly notificationsService: NotificationsService,
     private readonly paymentsService: PaymentsService,
+    private readonly loyaltyService: LoyaltyService,
   ) {}
 
   /**
@@ -357,6 +359,13 @@ export class OrdersService {
       } catch (error) {
         this.logger.warn(
           `COD settlement failed for order ${orderId} (status change already committed): ${(error as Error).message}`,
+        );
+      }
+      try {
+        await this.loyaltyService.earnForOrder(updated);
+      } catch (error) {
+        this.logger.warn(
+          `Loyalty earning failed for order ${orderId} (status change already committed): ${(error as Error).message}`,
         );
       }
     }

@@ -22,6 +22,9 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DevicesModule } from './modules/devices/devices.module';
 import { PaymentsModule } from './modules/payments/payments.module';
+import { AddressesModule } from './modules/addresses/addresses.module';
+import { FavoritesModule } from './modules/favorites/favorites.module';
+import { LoyaltyModule } from './modules/loyalty/loyalty.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -107,6 +110,9 @@ import { RolesGuard } from './common/guards/roles.guard';
     NotificationsModule,
     DevicesModule,
     PaymentsModule,
+    AddressesModule,
+    FavoritesModule,
+    LoyaltyModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.
