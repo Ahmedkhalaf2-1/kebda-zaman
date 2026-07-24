@@ -30,6 +30,34 @@ export function toPromoResponse(promo: PromoCode): PromoResponseDto {
   };
 }
 
+/** Admin view: everything the customer-facing shape omits (usage/limits/window/status). */
+export interface AdminPromoResponseDto extends PromoResponseDto {
+  id: string;
+  maxUsage: number | null;
+  usageCount: number;
+  perUserLimit: number | null;
+  startsAt: string | null;
+  expiresAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function toAdminPromoResponse(promo: PromoCode): AdminPromoResponseDto {
+  return {
+    ...toPromoResponse(promo),
+    id: promo.id,
+    maxUsage: promo.maxUsage,
+    usageCount: promo.usageCount,
+    perUserLimit: promo.perUserLimit,
+    startsAt: promo.startsAt?.toISOString() ?? null,
+    expiresAt: promo.expiresAt?.toISOString() ?? null,
+    isActive: promo.isActive,
+    createdAt: promo.createdAt.toISOString(),
+    updatedAt: promo.updatedAt.toISOString(),
+  };
+}
+
 /** Matches the Flutter `CartItem` model (plan §3.4): full hydrated menuItem,
  * server-computed unitPrice/totalPrice — never accepted on write.
  * `isAvailable` is an additive field: false when this line's item/variant/

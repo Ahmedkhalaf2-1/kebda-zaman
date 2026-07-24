@@ -73,6 +73,20 @@ enum DevicePlatform {
   WINDOWS
 }
 
+enum CampaignTargetAudience {
+  ALL
+  CUSTOMERS
+  GUESTS
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+}
+
 // ---------------------------------------------------------------------------
 // Identity & sessions (plan §2.1, §2.2)
 // ---------------------------------------------------------------------------
@@ -96,12 +110,13 @@ model User {
   updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?
 
-  refreshTokens RefreshToken[]
-  orders        Order[]
-  deviceTokens  DeviceToken[]
+  refreshTokens    RefreshToken[]
+  orders           Order[]
+  deviceTokens     DeviceToken[]
   /// One active cart per user (Cart.userId is unique) — guest carts have userId = null.
-  cart          Cart?
-  statusChanges OrderStatusHistory[]
+  cart             Cart?
+  statusChanges    OrderStatusHistory[]
+  createdCampaigns NotificationCampaign[]
 
   @@index([email])
   @@index([role])
@@ -472,4 +487,38 @@ model RestaurantSettings {
   workingHours      Json
   isMaintenanceMode Boolean  @default(false)
   updatedAt         DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Notification campaigns (plan §2.18, §9.4/§9.5). Phase 7C.
+// ---------------------------------------------------------------------------
+
+/// Admin push notification campaign. `type` is a plain string matching one of
+/// the 14 NotificationType values (validated at the DTO layer, not the DB).
+model NotificationCampaign {
+  id               String                 @id @default(uuid()) @db.Uuid
+  campaignName     String
+  title            String
+  body             String
+  imageUrl         String?
+  type             String
+  targetAudience   CampaignTargetAudience @default(ALL)
+  destinationRoute String?
+  entityId         String?
+  status           CampaignStatus         @default(DRAFT)
+  isScheduled      Boolean                @default(false)
+  scheduledAt      DateTime?
+  sentAt           DateTime?
+  totalRecipients  Int                    @default(0)
+  deliveredCount   Int                    @default(0)
+  openedCount      Int                    @default(0)
+  clickRate        Decimal                @default(0) @db.Decimal(5, 2)
+  createdByUserId  String                 @db.Uuid
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  createdBy User @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([scheduledAt])
 }

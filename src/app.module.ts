@@ -5,6 +5,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, JwtSignOptions } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule, seconds } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
@@ -88,6 +89,9 @@ import { RolesGuard } from './common/guards/roles.guard';
         },
       ],
     }),
+
+    // Backs CampaignsSchedulerService's @Interval poller (plan §9.5) — no Redis.
+    ScheduleModule.forRoot(),
 
     PrismaModule,
     HealthModule,

@@ -28,6 +28,7 @@
     "test:devices": "jest --config ./test/jest-devices.json",
     "test:admin-orders": "jest --config ./test/jest-admin-orders.json",
     "test:admin-catalog": "jest --config ./test/jest-admin-catalog.json",
+    "test:admin-platform": "jest --config ./test/jest-admin-platform.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed"
@@ -41,6 +42,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/schedule": "^6.1.3",
     "@nestjs/terminus": "^11.0.0",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^6.2.0",
