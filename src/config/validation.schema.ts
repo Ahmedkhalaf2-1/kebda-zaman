@@ -4,6 +4,9 @@ import * as Joi from 'joi';
  * Joi schema validating process env at boot. ConfigModule runs this on startup
  * and throws (fails fast) if a required variable is missing or malformed.
  */
+// Secret-bearing keys checked by the production placeholder guard below.
+const SECRET_ENV_KEYS = ['JWT_ACCESS_SECRET', 'DATABASE_URL', 'POSTGRES_PASSWORD'] as const;
+
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
   API_PORT: Joi.number().port().default(3000),
@@ -28,4 +31,22 @@ export const validationSchema = Joi.object({
   FIREBASE_SERVICE_ACCOUNT_JSON: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
-  .unknown(true);
+  .unknown(true)
+  // Fail fast if a production boot still carries a `.env.example` placeholder
+  // (e.g. `.env` copied without editing) — those exact strings are public,
+  // committed values and must never reach a real deployment.
+  .custom((value: Record<string, unknown>, helpers) => {
+    if (value.NODE_ENV !== 'production') {
+      return value;
+    }
+    const offending = SECRET_ENV_KEYS.filter((key) => {
+      const raw = value[key];
+      return typeof raw === 'string' && raw.toUpperCase().includes('CHANGE_ME');
+    });
+    if (offending.length > 0) {
+      return helpers.message({
+        custom: `Refusing to start in production with placeholder secret(s) still set: ${offending.join(', ')}. Replace these with real values.`,
+      });
+    }
+    return value;
+  });

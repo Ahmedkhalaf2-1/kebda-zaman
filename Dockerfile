@@ -41,8 +41,10 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=prod-deps /app/prisma ./prisma
 COPY package*.json ./
+COPY scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
+RUN chmod +x ./scripts/docker-entrypoint.sh
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://localhost:3000/api/v1/health || exit 1
-CMD ["node", "dist/main.js"]
+CMD ["./scripts/docker-entrypoint.sh"]

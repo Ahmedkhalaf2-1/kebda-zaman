@@ -63,7 +63,12 @@ import { RolesGuard } from './common/guards/roles.guard';
                   options: { singleLine: true, translateTime: 'SYS:standard' },
                 },
             redact: {
-              paths: ['req.headers.authorization', 'req.headers.cookie', 'req.body.password'],
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'req.body.password',
+                'req.body.refreshToken',
+              ],
               remove: true,
             },
           },

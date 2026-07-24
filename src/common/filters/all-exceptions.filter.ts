@@ -81,7 +81,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       code = mapped.code;
       message = mapped.message;
     } else if (exception instanceof Error) {
-      message = exception.message || message;
+      // In production, an unrecognized Error's message is never sent to the
+      // client — it may contain internal details (paths, host names, driver
+      // errors). It's still logged in full below. Non-production keeps the
+      // real message for local/dev debugging.
+      message = process.env.NODE_ENV === 'production' ? message : exception.message || message;
     }
 
     const requestId =

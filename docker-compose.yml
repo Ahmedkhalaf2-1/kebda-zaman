@@ -49,7 +49,10 @@ services:
     networks:
       - kz-net
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS http://localhost:3000/api/v1/health || exit 1']
+      # Readiness (includes a real DB ping), not just liveness — per plan
+      # §11.3, so orchestration only considers the container healthy once it
+      # can actually reach Postgres, not merely once the process is up.
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:3000/api/v1/health/ready || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3

@@ -20,6 +20,9 @@ serviceAccount*.json
 *.log
 logs
 
+# Local DB backups (contain real data — never commit)
+/backups
+
 # Editor / OS
 .DS_Store
 .idea

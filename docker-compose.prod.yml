@@ -1,0 +1,34 @@
+# ---------------------------------------------------------------------------
+# Production overlay (plan §12). Apply on top of the base stack:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Adds only what a real VPS deployment needs beyond the base file: resource
+# limits (a single small VPS has no orchestrator to protect it from a runaway
+# container) and bounded, rotated JSON log files (stdout logs grow forever
+# otherwise). No dev tools live here — the base compose file never had any.
+# ---------------------------------------------------------------------------
+
+services:
+  db:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

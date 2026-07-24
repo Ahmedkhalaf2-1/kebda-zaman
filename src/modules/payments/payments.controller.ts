@@ -10,9 +10,11 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { SENSITIVE_ROUTE_THROTTLE } from '../../common/constants/sensitive-route-throttle.const';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PaymentsService } from './payments.service';
 import { CreateIntentDto } from './dto/create-intent.dto';
@@ -38,6 +40,7 @@ export class PaymentsController {
   // concern for whichever real provider is added later; the parsed JSON body
   // is re-serialized here as a stand-in until then.
   @Public()
+  @Throttle(SENSITIVE_ROUTE_THROTTLE)
   @HttpCode(HttpStatus.OK)
   @Post('webhook')
   webhook(
