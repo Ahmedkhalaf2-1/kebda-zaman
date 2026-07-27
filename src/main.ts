@@ -2,13 +2,15 @@ import 'reflect-metadata';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { STATIC_UPLOADS_PREFIX } from './modules/uploads/uploads.constants';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
 
   // Route Nest's internal logs through the structured pino logger.
   app.useLogger(app.get(Logger));
@@ -19,8 +21,11 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
-  // Security headers.
-  app.use(helmet());
+  // Security headers. Cross-origin resource policy is relaxed so uploaded
+  // images (served statically below) can be embedded by the allowed CORS
+  // origins — the default `same-origin` policy would otherwise block <img>
+  // loads from the separate web admin/mobile origins this API is built for.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
   // CORS entirely from env — explicit origin allowlist, no wildcards.
   const corsOrigins = config.get<string[]>('corsOrigins') ?? [];
@@ -29,6 +34,10 @@ async function bootstrap(): Promise<void> {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
+
+  // Serves uploaded files as plain static assets at /uploads/<filename> —
+  // intentionally outside the /api/v1 prefix (not a versioned API resource).
+  app.useStaticAssets(config.get<string>('uploads.dir')!, { prefix: STATIC_UPLOADS_PREFIX });
 
   // Global request validation.
   app.useGlobalPipes(

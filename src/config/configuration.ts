@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 /**
  * Typed application configuration, loaded from validated environment variables.
  * Nothing here reads a hardcoded host/IP/secret — every value comes from the env.
@@ -29,6 +31,13 @@ export interface AppConfig {
     serviceAccountPath?: string;
     serviceAccountJson?: string;
   };
+  uploads: {
+    // Absolute path on disk where uploaded files are written/served from.
+    dir: string;
+    // Origin used to build the public imageUrl returned to clients (scheme+host+port).
+    publicBaseUrl: string;
+    maxFileSizeMb: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -57,5 +66,10 @@ export default (): AppConfig => ({
     projectId: process.env.FIREBASE_PROJECT_ID ?? 'keebda-zaman',
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || undefined,
     serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || undefined,
+  },
+  uploads: {
+    dir: resolve(process.cwd(), process.env.UPLOAD_DIR ?? './uploads'),
+    publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
+    maxFileSizeMb: parseInt(process.env.UPLOAD_MAX_FILE_SIZE_MB ?? '5', 10),
   },
 });

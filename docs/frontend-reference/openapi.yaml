@@ -1,0 +1,1099 @@
+openapi: 3.0.3
+info:
+  title: Kebda Zaman API
+  version: "0.1.0"
+  description: >
+    Hand-authored directly from the NestJS source (no @nestjs/swagger is installed in this
+    backend, so this could not be tool-generated from decorators — see the final report in the
+    conversation that produced this doc set). Every path, DTO, and status code below was verified
+    against the actual controller/DTO/service source, not invented. Base server path is /api/v1.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        statusCode: { type: integer }
+        error: { type: string }
+        message: { type: string }
+        code: { type: string }
+        details: { type: array, items: {} }
+        timestamp: { type: string, format: date-time }
+        path: { type: string }
+        requestId: { type: string }
+      required: [statusCode, error, message, code, timestamp, path]
+    UserResponseDto:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [CUSTOMER, ADMIN] }
+        isGuest: { type: boolean }
+        locale: { type: string }
+        createdAt: { type: string, format: date-time }
+    AuthResult:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/UserResponseDto' }
+        accessToken: { type: string }
+        refreshToken: { type: string }
+    RegisterDto:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 100 }
+        email: { type: string, format: email, maxLength: 255 }
+        password: { type: string, minLength: 8, maxLength: 72 }
+        phone: { type: string, maxLength: 30 }
+    LoginDto:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 255 }
+        password: { type: string, minLength: 1, maxLength: 72 }
+    RefreshDto:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+    LogoutDto:
+      type: object
+      properties:
+        refreshToken: { type: string }
+    GuestDto:
+      type: object
+      properties:
+        deviceId: { type: string, maxLength: 200 }
+    UpdateProfileDto:
+      type: object
+      properties:
+        name: { type: string, minLength: 2, maxLength: 100 }
+        phone: { type: string, maxLength: 30 }
+        avatarUrl: { type: string, maxLength: 2048 }
+        locale: { type: string, enum: [ar, en] }
+    CategoryDto:
+      type: object
+      required: [nameAr, nameEn]
+      properties:
+        nameAr: { type: string, maxLength: 100 }
+        nameEn: { type: string, maxLength: 100 }
+        iconUrl: { type: string, maxLength: 2048 }
+        displayOrder: { type: integer, minimum: 0 }
+    CategoryResponseDto:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        nameAr: { type: string }
+        nameEn: { type: string }
+        iconUrl: { type: string, nullable: true }
+        displayOrder: { type: integer }
+    AdminCategoryResponseDto:
+      allOf:
+        - $ref: '#/components/schemas/CategoryResponseDto'
+        - type: object
+          properties:
+            isActive: { type: boolean }
+    VariantDto:
+      type: object
+      required: [nameAr, nameEn, priceDelta]
+      properties:
+        id: { type: string, format: uuid }
+        nameAr: { type: string, maxLength: 100 }
+        nameEn: { type: string, maxLength: 100 }
+        priceDelta: { type: number }
+        isDefault: { type: boolean }
+        isActive: { type: boolean }
+        displayOrder: { type: integer, minimum: 0 }
+    AddonDto:
+      type: object
+      required: [nameAr, nameEn, price]
+      properties:
+        id: { type: string, format: uuid }
+        nameAr: { type: string, maxLength: 100 }
+        nameEn: { type: string, maxLength: 100 }
+        price: { type: number, minimum: 0 }
+        isAvailable: { type: boolean }
+        displayOrder: { type: integer, minimum: 0 }
+    AddonGroupDto:
+      type: object
+      required: [titleAr, titleEn, addons]
+      properties:
+        id: { type: string, format: uuid }
+        titleAr: { type: string, maxLength: 100 }
+        titleEn: { type: string, maxLength: 100 }
+        isRequired: { type: boolean }
+        minSelect: { type: integer, minimum: 0 }
+        maxSelect: { type: integer, minimum: 0 }
+        displayOrder: { type: integer, minimum: 0 }
+        addons:
+          type: array
+          items: { $ref: '#/components/schemas/AddonDto' }
+    MenuItemDto:
+      type: object
+      required: [categoryId, nameAr, nameEn, descriptionAr, descriptionEn, basePrice]
+      properties:
+        categoryId: { type: string, format: uuid }
+        nameAr: { type: string, maxLength: 150 }
+        nameEn: { type: string, maxLength: 150 }
+        descriptionAr: { type: string }
+        descriptionEn: { type: string }
+        basePrice: { type: number, minimum: 0 }
+        imageUrl: { type: string, maxLength: 2048, nullable: true }
+        isAvailable: { type: boolean }
+        isPopular: { type: boolean }
+        displayOrder: { type: integer, minimum: 0 }
+        variants:
+          type: array
+          items: { $ref: '#/components/schemas/VariantDto' }
+        addonGroups:
+          type: array
+          items: { $ref: '#/components/schemas/AddonGroupDto' }
+    ItemVariantResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        nameAr: { type: string }
+        nameEn: { type: string }
+        priceDelta: { type: number }
+        isDefault: { type: boolean }
+    AddonResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        nameAr: { type: string }
+        nameEn: { type: string }
+        price: { type: number }
+    AddonGroupResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        titleAr: { type: string }
+        titleEn: { type: string }
+        isRequired: { type: boolean }
+        minSelect: { type: integer }
+        maxSelect: { type: integer }
+        addons:
+          type: array
+          items: { $ref: '#/components/schemas/AddonResponseDto' }
+    MenuItemResponseDto:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        categoryId: { type: string, format: uuid }
+        nameAr: { type: string }
+        nameEn: { type: string }
+        descriptionAr: { type: string }
+        descriptionEn: { type: string }
+        basePrice: { type: number }
+        imageUrl: { type: string, nullable: true }
+        isAvailable: { type: boolean }
+        isPopular: { type: boolean }
+        variants:
+          type: array
+          items: { $ref: '#/components/schemas/ItemVariantResponseDto' }
+        addonGroups:
+          type: array
+          items: { $ref: '#/components/schemas/AddonGroupResponseDto' }
+    AdminMenuItemResponseDto:
+      allOf:
+        - $ref: '#/components/schemas/MenuItemResponseDto'
+        - type: object
+          properties:
+            displayOrder: { type: integer, nullable: true }
+    SetAvailabilityDto:
+      type: object
+      required: [isAvailable]
+      properties:
+        isAvailable: { type: boolean }
+    WorkingHoursDto:
+      type: object
+      required: [open, close]
+      properties:
+        open: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+        close: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+    UpdateSettingsDto:
+      type: object
+      required: [restaurantName, phone, addressText, taxRatePercent, deliveryFee, minOrderAmount, currency, workingHours, isMaintenanceMode]
+      properties:
+        restaurantName: { type: string, maxLength: 200 }
+        phone: { type: string, maxLength: 50 }
+        addressText: { type: string, maxLength: 500 }
+        taxRatePercent: { type: number, minimum: 0, maximum: 100 }
+        deliveryFee: { type: number, minimum: 0 }
+        minOrderAmount: { type: number, minimum: 0 }
+        currency: { type: string, maxLength: 10 }
+        workingHours: { $ref: '#/components/schemas/WorkingHoursDto' }
+        isMaintenanceMode: { type: boolean }
+    PublicSettingsResponseDto:
+      type: object
+      properties:
+        deliveryFee: { type: number }
+        taxRatePercent: { type: number }
+        minOrderAmount: { type: number }
+        workingHours: {}
+        isMaintenanceMode: { type: boolean }
+    AdminSettingsResponseDto:
+      allOf:
+        - $ref: '#/components/schemas/PublicSettingsResponseDto'
+        - type: object
+          properties:
+            id: { type: string }
+            restaurantName: { type: string }
+            phone: { type: string }
+            addressText: { type: string }
+            currency: { type: string }
+            updatedAt: { type: string, format: date-time }
+    AddCartItemDto:
+      type: object
+      required: [menuItemId, quantity]
+      properties:
+        menuItemId: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        addonIds: { type: array, items: { type: string, format: uuid } }
+        quantity: { type: integer, minimum: 1 }
+        specialInstructions: { type: string, maxLength: 500 }
+    UpdateCartItemDto:
+      type: object
+      properties:
+        quantity: { type: integer, minimum: 1 }
+        variantId: { type: string, format: uuid, nullable: true }
+        addonIds: { type: array, items: { type: string, format: uuid } }
+        specialInstructions: { type: string, maxLength: 500, nullable: true }
+    ApplyPromoDto:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, maxLength: 50 }
+    PromoResponseDto:
+      type: object
+      properties:
+        code: { type: string }
+        discountType: { type: string, enum: [PERCENT, FIXED] }
+        value: { type: number }
+        minOrderAmount: { type: number, nullable: true }
+        maxDiscountAmount: { type: number, nullable: true }
+    AdminPromoResponseDto:
+      allOf:
+        - $ref: '#/components/schemas/PromoResponseDto'
+        - type: object
+          properties:
+            id: { type: string }
+            maxUsage: { type: integer, nullable: true }
+            usageCount: { type: integer }
+            perUserLimit: { type: integer, nullable: true }
+            startsAt: { type: string, nullable: true }
+            expiresAt: { type: string, nullable: true }
+            isActive: { type: boolean }
+            createdAt: { type: string }
+            updatedAt: { type: string }
+    PromoDto:
+      type: object
+      required: [code, discountType, value]
+      properties:
+        code: { type: string, maxLength: 50 }
+        discountType: { type: string, enum: [PERCENT, FIXED] }
+        value: { type: number, minimum: 0 }
+        minOrderAmount: { type: number, minimum: 0 }
+        maxDiscountAmount: { type: number, minimum: 0 }
+        maxUsage: { type: integer, minimum: 1 }
+        perUserLimit: { type: integer, minimum: 1 }
+        startsAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        isActive: { type: boolean }
+    ValidatePromoDto:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, maxLength: 50 }
+        subtotal: { type: number, description: "accepted but ignored server-side" }
+    CartItemResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        menuItem: { $ref: '#/components/schemas/MenuItemResponseDto' }
+        selectedVariant: { $ref: '#/components/schemas/ItemVariantResponseDto' }
+        selectedAddons:
+          type: array
+          items: { $ref: '#/components/schemas/AddonResponseDto' }
+        quantity: { type: integer }
+        specialInstructions: { type: string, nullable: true }
+        unitPrice: { type: number }
+        totalPrice: { type: number }
+        isAvailable: { type: boolean }
+    CartResponseDto:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/CartItemResponseDto' }
+        appliedPromo:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/PromoResponseDto' }]
+        deliveryFee: { type: number }
+        taxRate: { type: number }
+    DeliveryAddressDto:
+      type: object
+      required: [title, street, building, city]
+      properties:
+        title: { type: string, maxLength: 100 }
+        street: { type: string, maxLength: 200 }
+        building: { type: string, maxLength: 100 }
+        floor: { type: string, maxLength: 50 }
+        apartment: { type: string, maxLength: 50 }
+        city: { type: string, maxLength: 100 }
+    CheckoutDto:
+      type: object
+      required: [deliveryMethod, paymentMethod]
+      properties:
+        deliveryMethod: { type: string, enum: [DELIVERY, PICKUP] }
+        paymentMethod: { type: string, enum: [CASH, CARD, WALLET] }
+        deliveryAddress: { $ref: '#/components/schemas/DeliveryAddressDto' }
+        promoCode: { type: string, maxLength: 50, description: 'Mutually exclusive with redeemRewardId' }
+        redeemRewardId: { type: string, maxLength: 50, description: 'One of the fixed loyalty reward ids; mutually exclusive with promoCode; redeemed atomically in the checkout transaction' }
+        notes: { type: string, maxLength: 1000 }
+    OrderItemResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        menuItem:
+          type: object
+          properties:
+            nameAr: { type: string }
+            nameEn: { type: string }
+            imageUrl: { type: string, nullable: true }
+        selectedVariant:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            nameAr: { type: string }
+            nameEn: { type: string }
+            priceSnapshot: { type: number }
+        selectedAddons:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              nameAr: { type: string }
+              nameEn: { type: string }
+              priceSnapshot: { type: number }
+        quantity: { type: integer }
+        specialInstructions: { type: string, nullable: true }
+        unitPrice: { type: number }
+        totalPrice: { type: number }
+    OrderResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        orderNumber: { type: string }
+        userId: { type: string }
+        user: { $ref: '#/components/schemas/UserResponseDto' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderItemResponseDto' }
+        status: { type: string, enum: [pending, confirmed, preparing, outForDelivery, delivered, cancelled] }
+        deliveryAddress: {}
+        paymentMethod: { type: string, enum: [cash, card, wallet] }
+        subtotal: { type: number }
+        deliveryFee: { type: number }
+        tax: { type: number }
+        discount: { type: number }
+        totalAmount: { type: number }
+        createdAt: { type: string, format: date-time }
+        estimatedDeliveryTime: { type: string, nullable: true, format: date-time }
+        loyaltyRedemption:
+          type: object
+          nullable: true
+          properties:
+            rewardId: { type: string }
+            rewardName: { type: string }
+            pointsRedeemed: { type: integer }
+    OrderStatusResponseDto:
+      type: object
+      properties:
+        status: { type: string }
+        statusHistory:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: string }
+              note: { type: string, nullable: true }
+              changedAt: { type: string, format: date-time }
+        estimatedDeliveryTime: { type: string, nullable: true }
+    UpdateOrderStatusDto:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [pending, confirmed, preparing, outForDelivery, delivered, cancelled] }
+        note: { type: string, maxLength: 1000 }
+    CreateIntentDto:
+      type: object
+      required: [orderId]
+      properties:
+        orderId: { type: string, format: uuid }
+    PaymentResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        orderId: { type: string }
+        method: { type: string }
+        status: { type: string, enum: [PENDING, PAID, FAILED, REFUNDED] }
+        amount: { type: number }
+        currency: { type: string }
+        provider: { type: string, nullable: true }
+        providerRef: { type: string, nullable: true }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    PaymentIntentResponseDto:
+      type: object
+      properties:
+        paymentId: { type: string }
+        status: { type: string }
+        providerData: { type: object }
+    RegisterDeviceDto:
+      type: object
+      required: [token, platform]
+      properties:
+        token: { type: string, maxLength: 4096 }
+        platform: { type: string, enum: [ANDROID, IOS, WEB, MACOS, WINDOWS] }
+    UpdateDeviceTokenDto:
+      type: object
+      required: [token, platform]
+      properties:
+        oldToken: { type: string, maxLength: 4096 }
+        token: { type: string, maxLength: 4096 }
+        platform: { type: string, enum: [ANDROID, IOS, WEB, MACOS, WINDOWS] }
+    DeleteDeviceTokenDto:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, maxLength: 4096 }
+    AddressDto:
+      type: object
+      required: [title, street, building, city]
+      properties:
+        title: { type: string, maxLength: 100 }
+        street: { type: string, maxLength: 200 }
+        building: { type: string, maxLength: 100 }
+        floor: { type: string, maxLength: 50 }
+        apartment: { type: string, maxLength: 50 }
+        city: { type: string, maxLength: 100 }
+        notes: { type: string, maxLength: 1000 }
+        latitude: { type: number }
+        longitude: { type: number }
+        isDefault: { type: boolean }
+    AddressResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        title: { type: string }
+        street: { type: string }
+        building: { type: string }
+        floor: { type: string, nullable: true }
+        apartment: { type: string, nullable: true }
+        city: { type: string }
+        notes: { type: string, nullable: true }
+        latitude: { type: number, nullable: true }
+        longitude: { type: number, nullable: true }
+        isDefault: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    AddFavoriteDto:
+      type: object
+      required: [menuItemId]
+      properties:
+        menuItemId: { type: string, format: uuid }
+    RedeemDto:
+      type: object
+      required: [rewardId]
+      properties:
+        rewardId: { type: string, enum: [free-delivery, discount-10, discount-25] }
+    LoyaltyAccountResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        pointsBalance: { type: integer }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    LoyaltyTransactionResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        delta: { type: integer }
+        reason: { type: string }
+        orderId: { type: string, nullable: true }
+        rewardId: { type: string, nullable: true }
+        createdAt: { type: string }
+    CampaignDto:
+      type: object
+      required: [campaignName, title, body, type]
+      properties:
+        campaignName: { type: string, maxLength: 150 }
+        title: { type: string, maxLength: 150 }
+        body: { type: string, maxLength: 1000 }
+        imageUrl: { type: string, maxLength: 2048 }
+        type:
+          type: string
+          enum: [general, promotion, offer, new_product, category, order_created, order_confirmed, order_preparing, order_ready, order_out_for_delivery, order_delivered, order_cancelled, payment_success, payment_failed]
+        targetAudience: { type: string, enum: [ALL, CUSTOMERS, GUESTS] }
+        destinationRoute: { type: string, maxLength: 500 }
+        entityId: { type: string, maxLength: 100 }
+    ScheduleCampaignDto:
+      allOf:
+        - $ref: '#/components/schemas/CampaignDto'
+        - type: object
+          required: [scheduledAt]
+          properties:
+            scheduledAt: { type: string, format: date-time }
+    AdminCampaignResponseDto:
+      type: object
+      properties:
+        id: { type: string }
+        campaignName: { type: string }
+        title: { type: string }
+        body: { type: string }
+        imageUrl: { type: string, nullable: true }
+        type: { type: string }
+        targetAudience: { type: string }
+        destinationRoute: { type: string, nullable: true }
+        entityId: { type: string, nullable: true }
+        status: { type: string, enum: [DRAFT, SCHEDULED, SENDING, SENT, FAILED] }
+        isScheduled: { type: boolean }
+        scheduledAt: { type: string, nullable: true }
+        sentAt: { type: string, nullable: true }
+        totalRecipients: { type: integer }
+        deliveredCount: { type: integer }
+        openedCount: { type: integer }
+        clickRate: { type: number }
+        createdAt: { type: string }
+    UploadImageResponseDto:
+      type: object
+      properties:
+        imageUrl: { type: string }
+paths:
+  /auth/register:
+    post:
+      summary: Register a new customer account
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterDto' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '409': { description: Email already exists, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+  /auth/signup:
+    post:
+      summary: Alias of /auth/register (same handler)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterDto' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+  /auth/login:
+    post:
+      summary: Login (any role — customer or admin)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '423': { description: Account locked (brute force), content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+  /admin/auth/login:
+    post:
+      summary: Admin login (canonical) — requires role=ADMIN
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { description: Invalid credentials }
+        '403': { description: Not an admin account }
+        '423': { description: Account locked }
+  /auth/admin/login:
+    post:
+      summary: Admin login (alias, same handler as /admin/auth/login)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+  /auth/refresh:
+    post:
+      summary: Rotate a refresh token for a new access+refresh pair
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RefreshDto' } } } }
+      responses:
+        '200': { description: OK }
+        '401': { description: 'Invalid, expired, or reused refresh token' }
+  /auth/logout:
+    post:
+      summary: Revoke one refresh token session
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/LogoutDto' } } } }
+      responses: { '204': { description: No Content } }
+  /auth/logout-all:
+    post:
+      summary: Revoke every active session for the caller
+      responses: { '204': { description: No Content } }
+  /auth/guest:
+    post:
+      summary: Create a guest session (real user, isGuest=true)
+      security: []
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/GuestDto' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+  /users/me:
+    get:
+      summary: Get own profile
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/UserResponseDto' } } } }
+    patch:
+      summary: Update own profile
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/UpdateProfileDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/UserResponseDto' } } } }
+  /categories:
+    get:
+      summary: List active categories
+      security: []
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CategoryResponseDto' } } } } }
+  /categories/{id}:
+    get:
+      summary: Get one category
+      security: []
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+  /menu:
+    get:
+      summary: List available menu items
+      security: []
+      parameters:
+        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MenuItemResponseDto' } } } } }
+  /menu/search:
+    get:
+      summary: Search menu items by name
+      security: []
+      parameters: [{ name: q, in: query, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MenuItemResponseDto' } } } } }
+  /menu/items/{id}:
+    get:
+      summary: Get one menu item
+      security: []
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/MenuItemResponseDto' } } } }
+        '404': { description: Not found }
+  /home/featured:
+    get:
+      summary: Featured items + categories for the home screen
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  featured: { type: array, items: { $ref: '#/components/schemas/MenuItemResponseDto' } }
+                  categories: { type: array, items: { $ref: '#/components/schemas/CategoryResponseDto' } }
+  /admin/categories:
+    get:
+      summary: '[ADMIN] List all categories'
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AdminCategoryResponseDto' } } } } } }
+    post:
+      summary: '[ADMIN] Create a category'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryDto' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminCategoryResponseDto' } } } } }
+  /admin/categories/{id}:
+    put:
+      summary: '[ADMIN] Full-replace update a category'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CategoryDto' } } } }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+    delete:
+      summary: '[ADMIN] Soft-delete a category'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '404': { description: Not found }
+        '409': { description: Category still has menu items }
+  /admin/menu:
+    get:
+      summary: '[ADMIN] List all menu items (incl. unavailable)'
+      parameters:
+        - { name: categoryId, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, schema: { type: string } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AdminMenuItemResponseDto' } } } } } }
+  /admin/menu/items:
+    post:
+      summary: '[ADMIN] Create a menu item'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/MenuItemDto' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMenuItemResponseDto' } } } }
+        '422': { description: Invalid category }
+  /admin/menu/items/{id}:
+    put:
+      summary: '[ADMIN] Full-replace update a menu item (incl. variants/addonGroups sync)'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/MenuItemDto' } } } }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+        '409': { description: Entity in use by an active cart }
+        '422': { description: Invalid association }
+    delete:
+      summary: '[ADMIN] Soft-delete a menu item'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '404': { description: Not found }
+  /admin/menu/items/{id}/availability:
+    patch:
+      summary: '[ADMIN] Toggle a menu item''s availability'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetAvailabilityDto' } } } }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+  /settings:
+    get:
+      summary: Public restaurant settings
+      security: []
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublicSettingsResponseDto' } } } } }
+  /admin/settings:
+    get:
+      summary: '[ADMIN] Full restaurant settings'
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSettingsResponseDto' } } } } }
+    put:
+      summary: '[ADMIN] Full-replace update restaurant settings'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateSettingsDto' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSettingsResponseDto' } } } } }
+  /cart:
+    get:
+      summary: Get the caller's cart (created lazily if none exists)
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } } }
+    delete:
+      summary: Clear all items from the cart
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } } }
+  /cart/items:
+    post:
+      summary: Add an item to the cart
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddCartItemDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } }
+        '404': { description: Item unavailable }
+        '422': { description: Invalid variant/addon selection }
+  /cart/items/{id}:
+    put:
+      summary: Update a cart line (merge-patch)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateCartItemDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } }
+        '404': { description: Cart item not found }
+    delete:
+      summary: Remove a cart line
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } }
+        '404': { description: Cart item not found }
+  /cart/apply-promo:
+    post:
+      summary: Apply a promo code to the cart
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApplyPromoDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } }
+        '404': { description: Promo not found }
+        '422': { description: Promo invalid/expired/min-order not met }
+  /cart/promo:
+    delete:
+      summary: Remove the applied promo from the cart
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CartResponseDto' } } } } }
+  /promos/validate:
+    post:
+      summary: Validate a promo code against the caller's live cart (does not apply it)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ValidatePromoDto' } } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  discountType: { type: string }
+                  value: { type: number }
+                  computedDiscount: { type: number }
+        '404': { description: Promo not found }
+        '422': { description: Promo invalid/expired/min-order not met }
+  /admin/promos:
+    get:
+      summary: '[ADMIN] List promo codes'
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AdminPromoResponseDto' } } } } } }
+    post:
+      summary: '[ADMIN] Create a promo code'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PromoDto' } } } }
+      responses:
+        '201': { description: Created }
+        '409': { description: Code already exists }
+  /admin/promos/{id}:
+    put:
+      summary: '[ADMIN] Full-replace update a promo code'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PromoDto' } } } }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+        '409': { description: Code already exists }
+    delete:
+      summary: '[ADMIN] Soft-delete a promo code'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '404': { description: Not found }
+  /checkout:
+    post:
+      summary: '[CUSTOMER] Convert the cart into an order (canonical path)'
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CheckoutDto' } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/OrderResponseDto' } } } }
+        '403': { description: 'Guest account attempted to redeemRewardId (GUEST_NOT_ELIGIBLE)' }
+        '404': { description: Unknown redeemRewardId }
+        '409': { description: Cart is empty }
+        '422': { description: 'Below minimum order / address required / item, promo, or loyalty reward invalid / promoCode and redeemRewardId both sent (PROMO_AND_LOYALTY_MUTUALLY_EXCLUSIVE)' }
+  /orders:
+    post:
+      summary: '[CUSTOMER] Alias of /checkout (same handler)'
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CheckoutDto' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/OrderResponseDto' } } } } }
+    get:
+      summary: List the caller's own orders
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, confirmed, preparing, outForDelivery, delivered, cancelled] } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/OrderResponseDto' } } } } } }
+  /orders/{id}:
+    get:
+      summary: Get one of the caller's own orders
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderResponseDto' } } } }
+        '404': { description: Not found }
+  /orders/{id}/status:
+    get:
+      summary: Get status + full history for one of the caller's own orders
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderStatusResponseDto' } } } }
+        '404': { description: Not found }
+  /admin/orders:
+    get:
+      summary: '[ADMIN] List every order'
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/OrderResponseDto' } } } } } }
+  /admin/orders/{id}:
+    get:
+      summary: '[ADMIN] Get any order by id'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderResponseDto' } } } }
+        '404': { description: Not found }
+  /admin/orders/{id}/status:
+    patch:
+      summary: '[ADMIN] Transition an order''s status'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateOrderStatusDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/OrderResponseDto' } } } }
+        '404': { description: Not found }
+        '422': { description: Invalid status transition — see 05_ORDER_LIFECYCLE.md }
+  /payments/intent:
+    post:
+      summary: '[CUSTOMER] Create/fetch a payment intent for an order (CASH only works)'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateIntentDto' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentIntentResponseDto' } } } }
+        '404': { description: Order or payment not found }
+        '409': { description: Payment already processed }
+        '501': { description: 'Payment provider not configured (CARD/WALLET)' }
+  /payments/{id}:
+    get:
+      summary: Get a payment by id (owner or ADMIN)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentResponseDto' } } } }
+        '404': { description: Not found }
+  /payments/webhook:
+    post:
+      summary: Gateway webhook receiver (not frontend-relevant)
+      security: []
+      parameters: [{ name: provider, in: query, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Received }
+        '400': { description: Unknown provider or invalid signature }
+        '404': { description: Payment not found for providerRef }
+  /devices/register:
+    post:
+      summary: Register/refresh an FCM device token
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterDeviceDto' } } } }
+      responses: { '201': { description: Created } }
+  /devices/token:
+    put:
+      summary: Move a device token from oldToken to a new token value
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateDeviceTokenDto' } } } }
+      responses:
+        '200': { description: OK }
+        '404': { description: Device token not found }
+    delete:
+      summary: Remove a device token (logout on this device)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeleteDeviceTokenDto' } } } }
+      responses:
+        '204': { description: No Content }
+        '404': { description: Device token not found }
+  /me/addresses:
+    get:
+      summary: List the caller's saved addresses
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AddressResponseDto' } } } } } }
+    post:
+      summary: Create a saved address
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddressDto' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AddressResponseDto' } } } } }
+  /me/addresses/{id}:
+    put:
+      summary: Full-replace update a saved address
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddressDto' } } } }
+      responses:
+        '200': { description: OK }
+        '403': { description: Belongs to another user }
+        '404': { description: Not found }
+    delete:
+      summary: Delete a saved address
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '403': { description: Belongs to another user }
+        '404': { description: Not found }
+  /me/addresses/{id}/default:
+    patch:
+      summary: Set a saved address as the default (clears default on all others)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK }
+        '403': { description: Belongs to another user }
+        '404': { description: Not found }
+  /me/favorites:
+    get:
+      summary: '[CUSTOMER] List favorite menu items'
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MenuItemResponseDto' } } } } } }
+    post:
+      summary: '[CUSTOMER] Add a menu item to favorites'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddFavoriteDto' } } } }
+      responses:
+        '201': { description: 'Created — returns the full updated favorites array', content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/MenuItemResponseDto' } } } } }
+        '404': { description: Menu item not found }
+        '409': { description: Already a favorite }
+  /me/favorites/{menuItemId}:
+    delete:
+      summary: '[CUSTOMER] Remove a menu item from favorites'
+      parameters: [{ name: menuItemId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '404': { description: Not a favorite }
+  /me/loyalty:
+    get:
+      summary: '[CUSTOMER, non-guest] Get loyalty account balance'
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/LoyaltyAccountResponseDto' } } } } }
+  /me/loyalty/transactions:
+    get:
+      summary: '[CUSTOMER, non-guest] List loyalty ledger transactions'
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/LoyaltyTransactionResponseDto' } } } } } }
+  /me/loyalty/redeem:
+    post:
+      summary: '[CUSTOMER, non-guest] LEGACY/manual redemption — standalone, no order link, no atomicity guarantee. Prefer CheckoutDto.redeemRewardId.'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RedeemDto' } } } }
+      responses:
+        '201': { description: Created }
+        '404': { description: Unknown reward }
+        '422': { description: Insufficient points }
+  /admin/notifications/send:
+    post:
+      summary: '[ADMIN] Send a push notification campaign immediately'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CampaignDto' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminCampaignResponseDto' } } } } }
+  /admin/notifications/schedule:
+    post:
+      summary: '[ADMIN] Schedule a push notification campaign for later'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleCampaignDto' } } } }
+      responses: { '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminCampaignResponseDto' } } } } }
+  /admin/notifications/campaigns:
+    get:
+      summary: '[ADMIN] List notification campaigns'
+      parameters: [{ name: page, in: query, schema: { type: integer, default: 1 } }]
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AdminCampaignResponseDto' } } } } } }
+  /admin/notifications/campaigns/{id}:
+    delete:
+      summary: '[ADMIN] Delete a DRAFT or SCHEDULED campaign'
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '404': { description: Not found }
+        '409': { description: Not deletable (already sent/sending/failed) }
+  /admin/uploads/image:
+    post:
+      summary: '[ADMIN] Upload an image, get back a public URL'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/UploadImageResponseDto' } } } }
+        '400': { description: 'Invalid file type or no file provided' }
+        '413': { description: File too large }
+  /health:
+    get:
+      summary: Liveness probe
+      security: []
+      responses: { '200': { description: OK } }
+  /health/ready:
+    get:
+      summary: Readiness probe (includes a real DB ping)
+      security: []
+      responses:
+        '200': { description: OK }
+        '503': { description: Database unreachable }

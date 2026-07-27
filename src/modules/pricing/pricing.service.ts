@@ -289,11 +289,14 @@ export class PricingService {
       promo = evaluation.promo;
     }
 
-    const discountedSubtotal = subtotal.minus(discount);
-    const tax = round2(discountedSubtotal.times(settings.taxRatePercent).dividedBy(100));
     const deliveryFee =
       deliveryMethod === DeliveryMethod.PICKUP ? new Prisma.Decimal(0) : settings.deliveryFee;
-    const totalAmount = discountedSubtotal.plus(tax).plus(deliveryFee);
+    const { tax, totalAmount } = this.computeTotals(
+      subtotal,
+      discount,
+      deliveryFee,
+      settings.taxRatePercent,
+    );
 
     return {
       lines,
@@ -305,5 +308,47 @@ export class PricingService {
       currency: settings.currency,
       promo,
     };
+  }
+
+  /**
+   * Layers an additional discount and/or a delivery-fee override onto an
+   * already-priced breakdown, recomputing tax/total through the exact same
+   * formula `priceCart` uses — the single source of truth for that math, so
+   * a second discount source (e.g. a loyalty reward, see
+   * `LoyaltyService.evaluateRedemption`) can never drift from how a promo
+   * discount is applied. Additive on top of whatever discount is already on
+   * the breakdown (usually `0`, since promo and loyalty are mutually
+   * exclusive at checkout — see OrdersService.checkout) rather than
+   * assuming it starts at zero, so this stays composable if that ever
+   * changes. Does not mutate the input breakdown.
+   */
+  applyDiscount(
+    breakdown: FullPriceBreakdown,
+    settings: RestaurantSettings,
+    extraDiscount: Prisma.Decimal,
+    deliveryFeeOverride?: Prisma.Decimal,
+  ): FullPriceBreakdown {
+    const discount = breakdown.discount.plus(extraDiscount);
+    const deliveryFee = deliveryFeeOverride ?? breakdown.deliveryFee;
+    const { tax, totalAmount } = this.computeTotals(
+      breakdown.subtotal,
+      discount,
+      deliveryFee,
+      settings.taxRatePercent,
+    );
+
+    return { ...breakdown, discount, deliveryFee, tax, totalAmount };
+  }
+
+  private computeTotals(
+    subtotal: Prisma.Decimal,
+    discount: Prisma.Decimal,
+    deliveryFee: Prisma.Decimal,
+    taxRatePercent: Prisma.Decimal,
+  ): { tax: Prisma.Decimal; totalAmount: Prisma.Decimal } {
+    const discountedSubtotal = subtotal.minus(discount);
+    const tax = round2(discountedSubtotal.times(taxRatePercent).dividedBy(100));
+    const totalAmount = discountedSubtotal.plus(tax).plus(deliveryFee);
+    return { tax, totalAmount };
   }
 }

@@ -142,10 +142,10 @@ export class MenuItemDto {
   @Min(0)
   basePrice!: number;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(2048)
-  imageUrl!: string;
+  imageUrl?: string | null;
 
   @IsOptional()
   @IsBoolean()

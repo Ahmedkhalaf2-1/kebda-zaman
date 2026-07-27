@@ -23,6 +23,9 @@ logs
 # Local DB backups (contain real data — never commit)
 /backups
 
+# Uploaded files written by the local (non-Docker) dev server
+/uploads
+
 # Editor / OS
 .DS_Store
 .idea

@@ -34,6 +34,14 @@ export interface AppNotificationPayload {
   body: string;
   route?: string;
   entityId?: string;
+  /** Generic entity-kind tag (e.g. `"order"`) — lets the client tell what
+   * `entityId` refers to without inferring it from `type`/`route`, so it can
+   * invalidate any cached view of that entity, not just deep-link into one. */
+  entityType?: string;
+  /** Order-status pushes only: same value as `entityId`, exposed under its
+   * own explicit key so the client never has to assume `entityId` means
+   * "order id" for other notification types. */
+  orderId?: string;
   imageUrl?: string;
   timestamp?: string;
 }
@@ -48,6 +56,8 @@ export function toFcmDataPayload(payload: AppNotificationPayload): Record<string
   };
   if (payload.route) data.route = payload.route;
   if (payload.entityId) data.entityId = payload.entityId;
+  if (payload.entityType) data.entityType = payload.entityType;
+  if (payload.orderId) data.orderId = payload.orderId;
   if (payload.imageUrl) data.imageUrl = payload.imageUrl;
   if (payload.timestamp) data.timestamp = payload.timestamp;
   return data;
@@ -105,6 +115,8 @@ export function buildOrderStatusPayload(
     body: config.body,
     route: `/orders/tracking/${orderId}`,
     entityId: orderId,
+    entityType: 'order',
+    orderId,
     timestamp: Date.now().toString(),
   };
 }

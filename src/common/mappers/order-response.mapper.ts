@@ -125,6 +125,13 @@ export function toStatusHistoryEntry(entry: OrderStatusHistory): OrderStatusHist
   };
 }
 
+/** Present only when a loyalty reward was redeemed atomically as part of this checkout — see OrdersService.checkout. */
+export interface OrderLoyaltyRedemptionDto {
+  rewardId: string;
+  rewardName: string;
+  pointsRedeemed: number;
+}
+
 export interface OrderResponseDto {
   id: string;
   orderNumber: string;
@@ -141,6 +148,8 @@ export interface OrderResponseDto {
   totalAmount: number;
   createdAt: string;
   estimatedDeliveryTime: string | null;
+  /** `null` when no loyalty reward was redeemed for this order (the normal case) — additive field, safe to ignore. */
+  loyaltyRedemption: OrderLoyaltyRedemptionDto | null;
 }
 
 export type OrderWithRelations = Order & {
@@ -148,7 +157,10 @@ export type OrderWithRelations = Order & {
   items: OrderItemWithCustomizations[];
 };
 
-export function toOrderResponse(order: OrderWithRelations): OrderResponseDto {
+export function toOrderResponse(
+  order: OrderWithRelations,
+  loyaltyRedemption: OrderLoyaltyRedemptionDto | null = null,
+): OrderResponseDto {
   return {
     id: order.id,
     orderNumber: order.orderNumber,
@@ -165,6 +177,7 @@ export function toOrderResponse(order: OrderWithRelations): OrderResponseDto {
     totalAmount: order.totalAmount.toNumber(),
     createdAt: order.createdAt.toISOString(),
     estimatedDeliveryTime: order.estimatedDeliveryTime?.toISOString() ?? null,
+    loyaltyRedemption,
   };
 }
 

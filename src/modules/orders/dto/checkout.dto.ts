@@ -57,10 +57,27 @@ export class CheckoutDto {
   @Type(() => DeliveryAddressDto)
   deliveryAddress?: DeliveryAddressDto;
 
+  // Mutually exclusive with `redeemRewardId` — a checkout may use a promo
+  // code OR redeem a loyalty reward, never both. Enforced in
+  // OrdersService.checkout (service-level, matching this file's existing
+  // convention of DTO-level shape validation + service-level business
+  // rules), not here at the DTO layer.
   @IsOptional()
   @IsString()
   @MaxLength(50)
   promoCode?: string;
+
+  // Redeems a fixed-catalog loyalty reward (see LOYALTY_REWARDS in
+  // loyalty.service.ts) atomically as part of this checkout — the points
+  // are spent, and the order created, in the same DB transaction, so a
+  // failure anywhere in checkout leaves the customer's point balance
+  // untouched. Mutually exclusive with `promoCode` (422 if both are sent).
+  // Not available to guest accounts (403 GUEST_NOT_ELIGIBLE).
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  redeemRewardId?: string;
 
   @IsOptional()
   @IsString()

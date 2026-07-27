@@ -39,7 +39,7 @@ export interface MenuItemResponseDto {
   descriptionAr: string;
   descriptionEn: string;
   basePrice: number;
-  imageUrl: string;
+  imageUrl: string | null;
   isAvailable: boolean;
   isPopular: boolean;
   variants: ItemVariantResponseDto[];

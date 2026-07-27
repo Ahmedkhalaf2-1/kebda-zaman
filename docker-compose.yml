@@ -43,6 +43,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
     ports:
       - '${API_PORT:-3000}:3000'
+    volumes:
+      # Persists uploaded images (menu item/category/promo photos) across
+      # container rebuilds/restarts — must match UPLOAD_DIR (./uploads, i.e.
+      # /app/uploads given the image's WORKDIR).
+      - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -61,6 +66,8 @@ services:
 
 volumes:
   pgdata:
+    driver: local
+  uploads:
     driver: local
 
 networks:

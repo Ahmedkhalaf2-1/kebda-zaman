@@ -14,8 +14,16 @@ import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
-import { LoyaltyService } from '../loyalty/loyalty.service';
 import {
+  assertNotGuest,
+  LOYALTY_REDEMPTION_REASON,
+  LOYALTY_REWARDS,
+  LoyaltyRedemptionEvaluation,
+  LoyaltyService,
+} from '../loyalty/loyalty.service';
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
+import {
+  OrderLoyaltyRedemptionDto,
   OrderResponseDto,
   OrderStatusResponseDto,
   toFrontendStatus,
@@ -56,18 +64,28 @@ export class OrdersService {
     private readonly notificationsService: NotificationsService,
     private readonly paymentsService: PaymentsService,
     private readonly loyaltyService: LoyaltyService,
+    private readonly adminNotificationsService: AdminNotificationsService,
   ) {}
 
   /**
    * Transactional checkout (plan §6.3/§7.2). Re-runs the full authoritative
    * pricing pass — the client never influences a single money figure. On any
-   * failure the transaction rolls back and the cart is left untouched;
-   * on success the cart is cleared only inside that same transaction.
+   * failure the transaction rolls back and the cart is left untouched; on
+   * success the cart is cleared only inside that same transaction.
+   *
+   * A customer may use a promo code OR redeem a loyalty reward, never both
+   * (`dto.promoCode` and `dto.redeemRewardId` are mutually exclusive — see
+   * the guard below). When a reward is redeemed, the point spend
+   * (`LoyaltyService.applyRedemption`) runs inside the exact same DB
+   * transaction as order creation and cart clearing: if anything else in
+   * checkout fails, the whole transaction rolls back, so the points are
+   * never spent against an order that doesn't exist.
    */
   async checkout(
     userId: string,
     dto: CheckoutDto,
     idempotencyKeyHeader?: string,
+    isGuest = false,
   ): Promise<OrderResponseDto> {
     const namespacedKey = idempotencyKeyHeader
       ? `user:${userId}:${idempotencyKeyHeader}`
@@ -79,8 +97,21 @@ export class OrdersService {
         include: { order: { include: orderInclude } },
       });
       if (existingPayment) {
-        return toOrderResponse(existingPayment.order);
+        // A retried request must see the exact same response as the original
+        // call, including whether a reward was redeemed — look the ledger
+        // entry back up rather than re-running (and re-charging) anything.
+        const loyaltyRedemption = await this.findLoyaltyRedemptionForOrder(
+          existingPayment.order.id,
+        );
+        return toOrderResponse(existingPayment.order, loyaltyRedemption);
       }
+    }
+
+    if (dto.promoCode && dto.redeemRewardId) {
+      throw new UnprocessableEntityException({
+        message: 'Use a promo code or redeem a loyalty reward, not both',
+        code: 'PROMO_AND_LOYALTY_MUTUALLY_EXCLUSIVE',
+      });
     }
 
     if (dto.deliveryMethod === 'DELIVERY' && !dto.deliveryAddress) {
@@ -99,12 +130,32 @@ export class OrdersService {
     // Authoritative repricing: re-validates every item/variant/addon and the
     // promo from fresh DB reads. Never trusts anything the client sent
     // beyond references+quantities+deliveryMethod+promoCode.
-    const breakdown = await this.pricingService.priceCart(
+    let breakdown = await this.pricingService.priceCart(
       inputs,
       settings,
       dto.deliveryMethod,
       dto.promoCode ?? null,
     );
+
+    // Loyalty redemption is evaluated (read-only) against the freshly-priced
+    // subtotal, then layered onto the breakdown through the same totals math
+    // `priceCart` itself uses (PricingService.applyDiscount) — never a
+    // second, hand-rolled computation. The actual point spend only happens
+    // later, inside the DB transaction below.
+    let loyaltyEvaluation: LoyaltyRedemptionEvaluation | null = null;
+    if (dto.redeemRewardId) {
+      assertNotGuest(isGuest);
+      loyaltyEvaluation = await this.loyaltyService.evaluateRedemption(userId, dto.redeemRewardId, {
+        subtotal: breakdown.subtotal,
+        deliveryMethod: dto.deliveryMethod,
+      });
+      breakdown = this.pricingService.applyDiscount(
+        breakdown,
+        settings,
+        loyaltyEvaluation.discount,
+        loyaltyEvaluation.waivesDeliveryFee ? new Prisma.Decimal(0) : undefined,
+      );
+    }
 
     if (breakdown.subtotal.lessThan(settings.minOrderAmount)) {
       throw new UnprocessableEntityException({
@@ -209,14 +260,67 @@ export class OrdersService {
             include: orderInclude,
           });
 
-          // Cart is cleared only after the order is fully created, inside
-          // this same transaction — any earlier failure leaves it untouched.
+          // Admin Notification Center (Sprint 1): every successfully created
+          // order writes one AdminNotification row, in this same transaction —
+          // never a separate post-commit step, so it can't be silently missed
+          // or left orphaned by a later rollback. The FCM push (Sprint 2) is
+          // deliberately NOT sent here — it's best-effort and must never be
+          // able to roll back the order, so it fires after commit, below.
+          const adminNotification = await this.adminNotificationsService.createForNewOrder(tx, {
+            orderId: created.id,
+            orderNumber: created.orderNumber,
+            customerId: created.userId,
+            customerName: created.user.fullName,
+            totalAmount: created.totalAmount,
+          });
+
+          // Redeems the loyalty reward — same transaction as order creation,
+          // so a failure anywhere below (or above) rolls this back too. Runs
+          // after order.create specifically so the ledger row can reference
+          // the real order id (LoyaltyService.applyRedemption re-checks the
+          // balance race-safely; it does not just trust `loyaltyEvaluation`).
+          if (loyaltyEvaluation) {
+            await this.loyaltyService.applyRedemption(
+              tx,
+              userId,
+              loyaltyEvaluation.reward,
+              created.id,
+            );
+          }
+
+          // Cart is cleared only after the order (and any redemption) is
+          // fully created, inside this same transaction — any earlier
+          // failure leaves both the cart and the point balance untouched.
           await tx.cartItem.deleteMany({ where: { cartId } });
 
-          return created;
+          return { created, adminNotificationId: adminNotification.id };
         });
 
-        return toOrderResponse(order);
+        // Best-effort admin push (Sprint 2) — fires only after the order and
+        // its AdminNotification row are both durably committed. A Firebase
+        // failure here is logged and swallowed, never surfaced to the
+        // customer and never able to undo the already-committed checkout.
+        try {
+          await this.notificationsService.sendAdminNewOrderNotification({
+            notificationId: order.adminNotificationId,
+            orderId: order.created.id,
+            orderNumber: order.created.orderNumber,
+            customerName: order.created.user.fullName,
+          });
+        } catch (error) {
+          this.logger.warn(
+            `Admin push notification failed for order ${order.created.id} (order already committed): ${(error as Error).message}`,
+          );
+        }
+
+        const loyaltyRedemption: OrderLoyaltyRedemptionDto | null = loyaltyEvaluation
+          ? {
+              rewardId: loyaltyEvaluation.reward.id,
+              rewardName: loyaltyEvaluation.reward.name,
+              pointsRedeemed: loyaltyEvaluation.reward.pointsCost,
+            }
+          : null;
+        return toOrderResponse(order.created, loyaltyRedemption);
       } catch (error) {
         if (this.isOrderNumberConflict(error) && attempt < MAX_ORDER_NUMBER_ATTEMPTS) {
           continue;
@@ -229,6 +333,22 @@ export class OrdersService {
       message: 'Could not generate a unique order number',
       code: 'ORDER_NUMBER_GENERATION_FAILED',
     });
+  }
+
+  /** Reconstructs the loyaltyRedemption response block for an already-created order (idempotent-replay path). */
+  private async findLoyaltyRedemptionForOrder(
+    orderId: string,
+  ): Promise<OrderLoyaltyRedemptionDto | null> {
+    const transaction = await this.prisma.loyaltyTransaction.findFirst({
+      where: { orderId, reason: LOYALTY_REDEMPTION_REASON },
+    });
+    const reward = transaction?.rewardId
+      ? LOYALTY_REWARDS.find((candidate) => candidate.id === transaction.rewardId)
+      : undefined;
+    if (!transaction || !reward) {
+      return null;
+    }
+    return { rewardId: reward.id, rewardName: reward.name, pointsRedeemed: -transaction.delta };
   }
 
   async listOrders(userId: string, query: ListOrdersDto): Promise<OrderResponseDto[]> {
@@ -244,7 +364,7 @@ export class OrdersService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return orders.map(toOrderResponse);
+    return orders.map((order) => toOrderResponse(order));
   }
 
   async getOrder(userId: string, orderId: string): Promise<OrderResponseDto> {
@@ -295,7 +415,7 @@ export class OrdersService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return orders.map(toOrderResponse);
+    return orders.map((order) => toOrderResponse(order));
   }
 
   /** ADMIN: no ownership restriction — any order. */

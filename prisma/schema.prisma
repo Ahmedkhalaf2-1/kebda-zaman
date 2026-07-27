@@ -175,7 +175,7 @@ model MenuItem {
   descriptionAr String    @db.Text
   descriptionEn String    @db.Text
   basePrice     Decimal   @db.Decimal(10, 2)
-  imageUrl      String
+  imageUrl      String?
   isAvailable   Boolean   @default(true)
   isPopular     Boolean   @default(false)
   displayOrder  Int?
@@ -586,18 +586,59 @@ model LoyaltyAccount {
 /// deltas conceptually, though `LoyaltyAccount.pointsBalance` caches the running
 /// total for fast reads (kept in sync transactionally with each insert here).
 /// `@@unique([orderId, reason])` is the idempotency guard against double-awarding
-/// points for the same order (orderId is null for non-order transactions, and
-/// Postgres treats distinct NULLs as non-conflicting, so redemptions are unaffected).
+/// points for the same order — this doubles as the guard against double-redeeming
+/// a checkout-time reward for the same order (orderId is null for non-order
+/// transactions, i.e. manual redemptions via POST /me/loyalty/redeem, and Postgres
+/// treats distinct NULLs as non-conflicting, so those are unaffected).
 model LoyaltyTransaction {
   id        String   @id @default(uuid()) @db.Uuid
   accountId String   @db.Uuid
   delta     Int
   reason    String
   orderId   String?  @db.Uuid
+  // Which LOYALTY_REWARDS catalog entry this REDEMPTION row corresponds to.
+  // Null for ORDER_EARNED rows (earning isn't tied to a reward) and for any
+  // pre-existing REDEMPTION row created before this column existed.
+  rewardId  String?
   createdAt DateTime @default(now())
 
   account LoyaltyAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([orderId, reason])
   @@index([accountId])
+}
+
+// ---------------------------------------------------------------------------
+// Admin Notification Center. Sprint 1.
+// ---------------------------------------------------------------------------
+
+/// Internal, admin-facing event feed (e.g. "new order placed") — distinct from
+/// `NotificationCampaign` (customer-facing FCM pushes triggered manually by an
+/// admin). This is written automatically by the backend as a side effect of
+/// domain events; FCM delivery to admin devices is a later sprint and will read
+/// from this same table rather than replacing it.
+///
+/// `type` is a plain string (not a DB enum), same convention as
+/// `NotificationCampaign.type` — new notification types never require a
+/// migration, only a new string constant validated at the call site.
+/// `orderId`/`customerId`/`customerName`/`orderNumber`/`totalAmount` are all
+/// nullable and unrelated to any live FK (soft references, same pattern as
+/// `OrderItem`'s snapshot fields) because future notification types (e.g. a
+/// low-stock alert) won't have an order or customer to attach at all.
+model AdminNotification {
+  id           String   @id @default(uuid()) @db.Uuid
+  type         String   @default("NEW_ORDER")
+  title        String
+  body         String
+  orderId      String?  @db.Uuid
+  customerId   String?  @db.Uuid
+  customerName String?
+  orderNumber  String?
+  totalAmount  Decimal? @db.Decimal(10, 2)
+  isRead       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([isRead])
+  @@index([createdAt])
 }

@@ -29,6 +29,11 @@ export const validationSchema = Joi.object({
   FIREBASE_PROJECT_ID: Joi.string().allow('').default('keebda-zaman'),
   FIREBASE_SERVICE_ACCOUNT_PATH: Joi.string().allow('').optional(),
   FIREBASE_SERVICE_ACCOUNT_JSON: Joi.string().allow('').optional(),
+  // Directory (relative to process cwd, or absolute) where uploaded files are stored.
+  UPLOAD_DIR: Joi.string().default('./uploads'),
+  // Public origin used to build the imageUrl returned by the upload endpoint.
+  PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
+  UPLOAD_MAX_FILE_SIZE_MB: Joi.number().integer().min(1).max(20).default(5),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)

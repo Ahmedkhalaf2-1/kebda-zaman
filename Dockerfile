@@ -43,6 +43,9 @@ COPY --from=prod-deps /app/prisma ./prisma
 COPY package*.json ./
 COPY scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 RUN chmod +x ./scripts/docker-entrypoint.sh
+# Uploaded-file storage (bind-mounted via the `uploads` volume in compose) — created
+# and owned by the non-root runtime user up front so it's writable at first boot.
+RUN mkdir -p ./uploads && chown -R app:app ./uploads
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaClient } from '@prisma/client';
+import { PasswordService } from '../src/modules/auth/password.service';
 
 /**
  * Phase 1 development seed.
@@ -23,6 +24,7 @@ import { PrismaClient } from '@prisma/client';
  */
 
 const prisma = new PrismaClient();
+const passwordService = new PasswordService();
 
 /** Deterministic, collision-free UUID derived from a stable seed key. */
 function id(seedKey: string): string {
@@ -304,6 +306,38 @@ async function seedAdmin(): Promise<void> {
   });
 }
 
+/**
+ * Real, login-capable administrator account. Idempotent upsert keyed on
+ * email: reruns refresh the hash/role of the existing row instead of
+ * duplicating it. Password is hashed with PasswordService (argon2id), the
+ * same hasher AuthService uses to verify credentials on login.
+ */
+async function seedRealAdmin(): Promise<void> {
+  const email = 'admin12@gmail.com';
+  const passwordHash = await passwordService.hash('Ahmed098');
+
+  const existing = await prisma.user.findFirst({ where: { email } });
+  if (existing) {
+    await prisma.user.update({
+      where: { id: existing.id },
+      data: { passwordHash, role: 'ADMIN', isGuest: false, deletedAt: null },
+    });
+  } else {
+    await prisma.user.create({
+      data: {
+        id: id('user:admin12'),
+        email,
+        passwordHash,
+        fullName: 'Admin',
+        role: 'ADMIN',
+        isGuest: false,
+        locale: 'en',
+        onboardingCompleted: true,
+      },
+    });
+  }
+}
+
 async function seedCategories(): Promise<Map<string, string>> {
   const categoryIds = new Map<string, string>();
 
@@ -444,11 +478,12 @@ async function seedMenuItems(categoryIds: Map<string, string>): Promise<void> {
 async function main(): Promise<void> {
   await seedRestaurantSettings();
   await seedAdmin();
+  await seedRealAdmin();
   const categoryIds = await seedCategories();
   await seedMenuItems(categoryIds);
 
   console.log(
-    `Seed complete: ${CATEGORIES.length} categories, ${MENU_ITEMS.length} menu items, 1 restaurant settings row, 1 admin user.`,
+    `Seed complete: ${CATEGORIES.length} categories, ${MENU_ITEMS.length} menu items, 1 restaurant settings row, 2 admin users.`,
   );
 }
 

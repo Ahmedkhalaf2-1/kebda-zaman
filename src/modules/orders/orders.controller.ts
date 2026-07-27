@@ -29,7 +29,7 @@ export class OrdersController {
     @Body() dto: CheckoutDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.ordersService.checkout(user.id, dto, idempotencyKey);
+    return this.ordersService.checkout(user.id, dto, idempotencyKey, user.isGuest);
   }
 
   @Get()
