@@ -391,6 +391,7 @@ model OrderItem {
   customizations OrderItemCustomization[]
 
   @@index([orderId])
+  @@index([menuItemId])
 }
 
 /// Immutable snapshot of a chosen variant/addon at order time. Plan §2.13.

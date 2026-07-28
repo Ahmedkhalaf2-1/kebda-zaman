@@ -29,6 +29,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { AdminNotificationsModule } from './modules/admin-notifications/admin-notifications.module';
 import { StaffModule } from './modules/staff/staff.module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -126,6 +127,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     AdminNotificationsModule,
     StaffModule,
     CustomersModule,
+    ReportsModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.
