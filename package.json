@@ -28,6 +28,7 @@
     "test:devices": "jest --config ./test/jest-devices.json",
     "test:admin-orders": "jest --config ./test/jest-admin-orders.json",
     "test:admin-reports": "jest --config ./test/jest-admin-reports.json",
+    "test:restaurant-settings": "jest --config ./test/jest-restaurant-settings.json",
     "test:admin-catalog": "jest --config ./test/jest-admin-catalog.json",
     "test:admin-platform": "jest --config ./test/jest-admin-platform.json",
     "test:payments": "jest --config ./test/jest-payments.json",

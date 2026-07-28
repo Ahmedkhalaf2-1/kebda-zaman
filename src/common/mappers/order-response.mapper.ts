@@ -132,6 +132,17 @@ export interface OrderLoyaltyRedemptionDto {
   pointsRedeemed: number;
 }
 
+/** Present only for DELIVERY orders that resolved a delivery zone at checkout
+ * time (Phase 8) — null for PICKUP and for orders placed before this phase.
+ * Built entirely from the order's own snapshot columns, never a live
+ * DeliveryZone join — a zone renamed/deactivated after this order shipped
+ * must not change what this order reports. */
+export interface OrderDeliveryZoneDto {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+}
+
 export interface OrderResponseDto {
   id: string;
   orderNumber: string;
@@ -150,6 +161,8 @@ export interface OrderResponseDto {
   estimatedDeliveryTime: string | null;
   /** `null` when no loyalty reward was redeemed for this order (the normal case) — additive field, safe to ignore. */
   loyaltyRedemption: OrderLoyaltyRedemptionDto | null;
+  /** `null` for PICKUP orders (and any order placed before Phase 8). */
+  deliveryZone: OrderDeliveryZoneDto | null;
 }
 
 export type OrderWithRelations = Order & {
@@ -178,6 +191,13 @@ export function toOrderResponse(
     createdAt: order.createdAt.toISOString(),
     estimatedDeliveryTime: order.estimatedDeliveryTime?.toISOString() ?? null,
     loyaltyRedemption,
+    deliveryZone: order.deliveryZoneId
+      ? {
+          id: order.deliveryZoneId,
+          nameAr: order.deliveryZoneNameArSnapshot ?? '',
+          nameEn: order.deliveryZoneNameEnSnapshot ?? '',
+        }
+      : null,
   };
 }
 

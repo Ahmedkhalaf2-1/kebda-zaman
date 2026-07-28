@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { DeliveryMethod, Prisma, PromoCode, RestaurantSettings } from '@prisma/client';
+import { DeliveryMethod, DeliveryZone, Prisma, PromoCode, RestaurantSettings } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   MenuItemWithRelations,
@@ -272,12 +272,19 @@ export class PricingService {
    * checkout (Phase 5). Not yet wired to any Phase 4 HTTP endpoint: the Cart
    * view has no deliveryMethod (that's chosen at checkout), so cart responses
    * only surface flat settings.deliveryFee/taxRatePercent (see CartService).
+   *
+   * `deliveryZone` (Phase 8): when a DELIVERY order resolves an active
+   * DeliveryZone, its `deliveryFee` is authoritative and overrides
+   * `settings.deliveryFee` — callers that don't pass one (direct unit tests,
+   * or any future non-zone delivery context) keep the prior flat-fee
+   * behavior unchanged.
    */
   async priceCart(
     inputs: CartLineInput[],
     settings: RestaurantSettings,
     deliveryMethod: DeliveryMethod,
     promoCode?: string | null,
+    deliveryZone?: DeliveryZone | null,
   ): Promise<FullPriceBreakdown> {
     const { lines, subtotal } = await this.priceLines(inputs);
 
@@ -290,7 +297,9 @@ export class PricingService {
     }
 
     const deliveryFee =
-      deliveryMethod === DeliveryMethod.PICKUP ? new Prisma.Decimal(0) : settings.deliveryFee;
+      deliveryMethod === DeliveryMethod.PICKUP
+        ? new Prisma.Decimal(0)
+        : (deliveryZone?.deliveryFee ?? settings.deliveryFee);
     const { tax, totalAmount } = this.computeTotals(
       subtotal,
       discount,

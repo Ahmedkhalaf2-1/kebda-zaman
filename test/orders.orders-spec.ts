@@ -19,6 +19,7 @@ describe('Orders & Checkout (integration)', () => {
   let checkoutItem: { id: string };
   let cheapItem: { id: string };
   let optionsItem: { id: string; variantId: string; addonId: string };
+  let deliveryZoneId: string;
 
   const cleanupUserIds: string[] = [];
   const deliveryAddress = {
@@ -154,6 +155,11 @@ describe('Orders & Checkout (integration)', () => {
         { code: 'PHASE5-RACE', discountType: 'FIXED', value: D('5.00'), maxUsage: 1 },
       ],
     });
+
+    const zone = await prisma.deliveryZone.create({
+      data: { nameAr: 'منطقة الاختبار', nameEn: 'Test Zone', deliveryFee: D('15.00'), minimumOrder: D('0.00') },
+    });
+    deliveryZoneId = zone.id;
   });
 
   afterAll(async () => {
@@ -172,6 +178,7 @@ describe('Orders & Checkout (integration)', () => {
     });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
+    await prisma.deliveryZone.delete({ where: { id: deliveryZoneId } });
     await app.close();
   });
 
@@ -589,10 +596,23 @@ describe('Orders & Checkout (integration)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress });
+        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress, deliveryZoneId });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBeGreaterThan(0);
       expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
+      expect(res.body.deliveryZone).toMatchObject({ id: deliveryZoneId, nameEn: 'Test Zone' });
+    });
+
+    it('rejects a DELIVERY checkout without a deliveryZoneId', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('DELIVERY_ZONE_UNAVAILABLE');
     });
 
     it('zeroes the delivery fee and ignores address for PICKUP', async () => {

@@ -91,7 +91,9 @@ export class CartService {
         toCartItemResponse(item.id, item.specialInstructions, lines[index]),
       ),
       appliedPromo,
-      deliveryFee: settings.deliveryFee.toNumber(),
+      // No deliveryMethod/deliveryZone is known yet at the cart stage — see
+      // CartResponseDto's doc comment. Never settings.deliveryFee here.
+      deliveryFee: 0,
       taxRate: settings.taxRatePercent.toNumber(),
     };
   }

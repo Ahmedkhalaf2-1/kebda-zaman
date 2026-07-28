@@ -253,33 +253,36 @@ const MENU_ITEMS: MenuItemSeed[] = [
   },
 ];
 
+const SEED_WEEKLY_HOURS = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+  dayOfWeek,
+  isOpen: true,
+  openTime: '10:00',
+  closeTime: '02:00',
+}));
+
 async function seedRestaurantSettings(): Promise<void> {
+  const shared = {
+    restaurantNameAr: 'كبدة زمان',
+    restaurantNameEn: 'Kebda Zaman',
+    logoUrl: null,
+    phone: '+20100000000',
+    addressAr: 'القاهرة، مصر',
+    addressEn: 'Cairo, Egypt',
+    taxRatePercent: money(14),
+    deliveryFee: money(20),
+    minOrderAmount: money(50),
+    currency: 'EGP',
+    workingHours: SEED_WEEKLY_HOURS,
+    timezone: 'Africa/Cairo',
+    isMaintenanceMode: false,
+    acceptingOrders: true,
+    closedMessageAr: null,
+    closedMessageEn: null,
+  };
   await prisma.restaurantSettings.upsert({
     where: { singleton: true },
-    update: {
-      restaurantName: 'Kebda Zaman',
-      phone: '+20100000000',
-      addressText: 'Cairo, Egypt',
-      taxRatePercent: money(14),
-      deliveryFee: money(20),
-      minOrderAmount: money(50),
-      currency: 'EGP',
-      workingHours: { open: '10:00', close: '02:00' },
-      isMaintenanceMode: false,
-    },
-    create: {
-      id: id('restaurant-settings:singleton'),
-      singleton: true,
-      restaurantName: 'Kebda Zaman',
-      phone: '+20100000000',
-      addressText: 'Cairo, Egypt',
-      taxRatePercent: money(14),
-      deliveryFee: money(20),
-      minOrderAmount: money(50),
-      currency: 'EGP',
-      workingHours: { open: '10:00', close: '02:00' },
-      isMaintenanceMode: false,
-    },
+    update: shared,
+    create: { id: id('restaurant-settings:singleton'), singleton: true, ...shared },
   });
 }
 

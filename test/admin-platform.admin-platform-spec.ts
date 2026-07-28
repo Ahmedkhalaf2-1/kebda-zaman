@@ -22,15 +22,22 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
   const cleanupCampaignIds: string[] = [];
   const cleanupTokens: string[] = [];
   let originalSettings: {
-    restaurantName: string;
+    restaurantNameAr: string;
+    restaurantNameEn: string;
+    logoUrl: string | null;
     phone: string;
-    addressText: string;
+    addressAr: string;
+    addressEn: string;
     taxRatePercent: number;
     deliveryFee: number;
     minOrderAmount: number;
     currency: string;
     workingHours: Prisma.InputJsonValue;
+    timezone: string;
     isMaintenanceMode: boolean;
+    acceptingOrders: boolean;
+    closedMessageAr: string | null;
+    closedMessageEn: string | null;
   };
 
   async function registerCustomer() {
@@ -70,6 +77,15 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       value: 10,
       ...overrides,
     };
+  }
+
+  function weeklyHours(opts: { openTime: string; closeTime: string }) {
+    return Array.from({ length: 7 }, (_, dayOfWeek) => ({
+      dayOfWeek,
+      isOpen: true,
+      openTime: opts.openTime,
+      closeTime: opts.closeTime,
+    }));
   }
 
   function newCampaignPayload(overrides: Record<string, unknown> = {}) {
@@ -112,15 +128,22 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       where: { singleton: true },
     });
     originalSettings = {
-      restaurantName: settings.restaurantName,
+      restaurantNameAr: settings.restaurantNameAr,
+      restaurantNameEn: settings.restaurantNameEn,
+      logoUrl: settings.logoUrl,
       phone: settings.phone,
-      addressText: settings.addressText,
+      addressAr: settings.addressAr,
+      addressEn: settings.addressEn,
       taxRatePercent: settings.taxRatePercent.toNumber(),
       deliveryFee: settings.deliveryFee.toNumber(),
       minOrderAmount: settings.minOrderAmount.toNumber(),
       currency: settings.currency,
       workingHours: settings.workingHours as Prisma.InputJsonValue,
+      timezone: settings.timezone,
       isMaintenanceMode: settings.isMaintenanceMode,
+      acceptingOrders: settings.acceptingOrders,
+      closedMessageAr: settings.closedMessageAr,
+      closedMessageEn: settings.closedMessageEn,
     };
   });
 
@@ -307,15 +330,19 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       expect(getRes.body.currency).toBe(originalSettings.currency);
 
       const newPayload = {
-        restaurantName: 'Kebda Zaman Test',
+        restaurantNameAr: 'كبدة زمان تجريبي',
+        restaurantNameEn: 'Kebda Zaman Test',
         phone: '+20111111111',
-        addressText: 'Giza, Egypt',
+        addressAr: 'الجيزة، مصر',
+        addressEn: 'Giza, Egypt',
         taxRatePercent: 12,
         deliveryFee: 18,
         minOrderAmount: 40,
         currency: 'EGP',
-        workingHours: { open: '09:00', close: '23:00' },
+        workingHours: weeklyHours({ openTime: '09:00', closeTime: '23:00' }),
+        timezone: 'Africa/Cairo',
         isMaintenanceMode: true,
+        acceptingOrders: true,
       };
       const putRes = await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
@@ -351,7 +378,19 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       const res = await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
         .set('Authorization', `Bearer ${admin.accessToken}`)
-        .send({ ...originalSettings, workingHours: { open: '10am', close: '23:00' } });
+        .send({ ...originalSettings, workingHours: weeklyHours({ openTime: '10am', closeTime: '23:00' }) });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a working-hours array missing a dayOfWeek with 400', async () => {
+      const admin = await registerAdmin();
+      const res = await request(app.getHttpServer())
+        .put('/api/v1/admin/settings')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({
+          ...originalSettings,
+          workingHours: weeklyHours({ openTime: '10:00', closeTime: '23:00' }).slice(0, 6),
+        });
       expect(res.status).toBe(400);
     });
 

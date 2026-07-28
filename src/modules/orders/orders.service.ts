@@ -7,11 +7,12 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { DeliveryZone, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
+import { DeliveryZonesService } from '../delivery-zones/delivery-zones.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
 import {
@@ -61,6 +62,7 @@ export class OrdersService {
     private readonly cartService: CartService,
     private readonly pricingService: PricingService,
     private readonly settingsService: SettingsService,
+    private readonly deliveryZonesService: DeliveryZonesService,
     private readonly notificationsService: NotificationsService,
     private readonly paymentsService: PaymentsService,
     private readonly loyaltyService: LoyaltyService,
@@ -114,6 +116,21 @@ export class OrdersService {
       });
     }
 
+    const settings = await this.settingsService.getSettings();
+    // Manual gate only (plan Phase 8) — workingHours is informational/display
+    // only and never itself blocks checkout. Cart/menu browsing is a
+    // different controller entirely and is unaffected by this check.
+    if (!settings.acceptingOrders) {
+      throw new UnprocessableEntityException({
+        message: settings.closedMessageEn || 'The restaurant is not currently accepting orders',
+        code: 'RESTAURANT_NOT_ACCEPTING_ORDERS',
+        details: {
+          closedMessageAr: settings.closedMessageAr,
+          closedMessageEn: settings.closedMessageEn,
+        },
+      });
+    }
+
     if (dto.deliveryMethod === 'DELIVERY' && !dto.deliveryAddress) {
       throw new UnprocessableEntityException({
         message: 'A delivery address is required for delivery orders',
@@ -121,20 +138,37 @@ export class OrdersService {
       });
     }
 
+    // Delivery-zone resolution (plan Phase 8): the client only ever sends a
+    // reference (deliveryZoneId) — the actual deliveryFee/minimumOrder always
+    // come from this freshly-read DB row, never from the client. Missing,
+    // unknown, inactive, or soft-deleted zones are all DELIVERY_ZONE_UNAVAILABLE.
+    let deliveryZone: DeliveryZone | null = null;
+    if (dto.deliveryMethod === 'DELIVERY') {
+      deliveryZone = dto.deliveryZoneId
+        ? await this.deliveryZonesService.findActiveById(dto.deliveryZoneId)
+        : null;
+      if (!deliveryZone) {
+        throw new UnprocessableEntityException({
+          message: 'Selected delivery zone is not available',
+          code: 'DELIVERY_ZONE_UNAVAILABLE',
+        });
+      }
+    }
+
     const { cartId, items, inputs } = await this.cartService.getCartForCheckout(userId);
     if (items.length === 0) {
       throw new ConflictException({ message: 'Cart is empty', code: 'EMPTY_CART' });
     }
 
-    const settings = await this.settingsService.getSettings();
     // Authoritative repricing: re-validates every item/variant/addon and the
     // promo from fresh DB reads. Never trusts anything the client sent
-    // beyond references+quantities+deliveryMethod+promoCode.
+    // beyond references+quantities+deliveryMethod+promoCode+deliveryZoneId.
     let breakdown = await this.pricingService.priceCart(
       inputs,
       settings,
       dto.deliveryMethod,
       dto.promoCode ?? null,
+      deliveryZone,
     );
 
     // Loyalty redemption is evaluated (read-only) against the freshly-priced
@@ -155,6 +189,14 @@ export class OrdersService {
         loyaltyEvaluation.discount,
         loyaltyEvaluation.waivesDeliveryFee ? new Prisma.Decimal(0) : undefined,
       );
+    }
+
+    if (deliveryZone && breakdown.subtotal.lessThan(deliveryZone.minimumOrder)) {
+      throw new UnprocessableEntityException({
+        message: `Minimum order amount of ${deliveryZone.minimumOrder.toString()} not met for this delivery zone`,
+        code: 'MINIMUM_ORDER_NOT_MET',
+        details: { minimumOrder: deliveryZone.minimumOrder.toNumber() },
+      });
     }
 
     if (breakdown.subtotal.lessThan(settings.minOrderAmount)) {
@@ -206,6 +248,9 @@ export class OrdersService {
               appliedPromoId: breakdown.promo?.id ?? null,
               promoCodeSnapshot: breakdown.promo?.code ?? null,
               deliveryAddressJson: addressSnapshot,
+              deliveryZoneId: deliveryZone?.id ?? null,
+              deliveryZoneNameArSnapshot: deliveryZone?.nameAr ?? null,
+              deliveryZoneNameEnSnapshot: deliveryZone?.nameEn ?? null,
               items: {
                 create: breakdown.lines.map((line, index) => ({
                   menuItemId: line.menuItem.id,

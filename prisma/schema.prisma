@@ -337,31 +337,41 @@ model CartItemAddon {
 
 /// Plan §2.11. Never hard-deleted.
 model Order {
-  id                    String         @id @default(uuid()) @db.Uuid
-  orderNumber           String         @unique
-  userId                String         @db.Uuid
-  status                OrderStatus    @default(PENDING)
-  subtotal              Decimal        @db.Decimal(10, 2)
-  deliveryFee           Decimal        @db.Decimal(10, 2)
-  tax                   Decimal        @db.Decimal(10, 2)
-  discount              Decimal        @db.Decimal(10, 2)
-  totalAmount           Decimal        @db.Decimal(10, 2)
-  deliveryMethod        DeliveryMethod
-  paymentMethod         PaymentMethod
-  paymentStatus         PaymentStatus  @default(PENDING)
-  appliedPromoId        String?        @db.Uuid
-  promoCodeSnapshot     String?
+  id                         String         @id @default(uuid()) @db.Uuid
+  orderNumber                String         @unique
+  userId                     String         @db.Uuid
+  status                     OrderStatus    @default(PENDING)
+  subtotal                   Decimal        @db.Decimal(10, 2)
+  deliveryFee                Decimal        @db.Decimal(10, 2)
+  tax                        Decimal        @db.Decimal(10, 2)
+  discount                   Decimal        @db.Decimal(10, 2)
+  totalAmount                Decimal        @db.Decimal(10, 2)
+  deliveryMethod             DeliveryMethod
+  paymentMethod              PaymentMethod
+  paymentStatus              PaymentStatus  @default(PENDING)
+  appliedPromoId             String?        @db.Uuid
+  promoCodeSnapshot          String?
   // Address snapshot at checkout time — decouples the order from later edits/
   // deletes of the customer's saved addresses (Address entity is Phase 2+).
-  deliveryAddressJson   Json
-  estimatedDeliveryTime DateTime?
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
-  cancelledAt           DateTime?
-  cancelReason          String?
+  deliveryAddressJson        Json
+  // Delivery-zone reference (Phase 8) — null for PICKUP orders and for
+  // orders placed before this phase. `deliveryFee` above already holds the
+  // authoritative fee snapshot (the zone's fee at order time, or 0 for
+  // pickup); these two columns snapshot only the zone's bilingual name so
+  // history stays readable if the zone is later renamed/deactivated. Mirrors
+  // the promoCodeSnapshot convention above.
+  deliveryZoneId             String?        @db.Uuid
+  deliveryZoneNameArSnapshot String?
+  deliveryZoneNameEnSnapshot String?
+  estimatedDeliveryTime      DateTime?
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  cancelledAt                DateTime?
+  cancelReason               String?
 
   user          User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
   appliedPromo  PromoCode?           @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
+  deliveryZone  DeliveryZone?        @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items         OrderItem[]
   statusHistory OrderStatusHistory[]
   payments      Payment[]
@@ -369,6 +379,7 @@ model Order {
   @@index([userId])
   @@index([status])
   @@index([createdAt])
+  @@index([deliveryZoneId])
 }
 
 /// Plan §2.12. Snapshot row — no updatedAt (immutable once created).
@@ -480,19 +491,72 @@ model DeviceToken {
 /// Single authoritative source for delivery fee, tax rate, min order. Plan §2.19.
 /// Singleton enforced via the unique `singleton` marker column (always `true`),
 /// which Postgres allows at most one row to satisfy.
+///
+/// Phase 8: restaurantName/addressText (single-language) were split into
+/// Ar/En pairs to match every other bilingual model in this schema
+/// (Category, MenuItem, ...) — the migration backfills both from the prior
+/// single value, so no data is lost. `workingHours` keeps its column/JSON
+/// key name but its shape changed from a single `{open,close}` pair to a
+/// 7-entry per-day array (see WorkingHoursDayDto) — the migration backfills
+/// every day from the prior single pair with `isOpen: true`, preserving the
+/// restaurant's prior effective hours. `deliveryFee`/`minOrderAmount` remain
+/// the store-wide defaults/floor (still enforced for every order regardless
+/// of fulfillment type); for DELIVERY orders the authoritative per-order fee
+/// and minimum now come from the selected DeliveryZone instead (see Order
+/// below) — these settings fields are no longer read for DELIVERY pricing,
+/// but are kept (not removed) since they still gate PICKUP's store-wide
+/// minimum and remain a reasonable fallback/default.
 model RestaurantSettings {
   id                String   @id @default(uuid()) @db.Uuid
   singleton         Boolean  @unique @default(true)
-  restaurantName    String
+  restaurantNameAr  String
+  restaurantNameEn  String
+  logoUrl           String?
   phone             String
-  addressText       String
+  addressAr         String
+  addressEn         String
   taxRatePercent    Decimal  @db.Decimal(10, 2)
   deliveryFee       Decimal  @db.Decimal(10, 2)
   minOrderAmount    Decimal  @db.Decimal(10, 2)
   currency          String
+  /// 7-entry array: [{ dayOfWeek: 0-6, isOpen: boolean, openTime: "HH:MM"|null, closeTime: "HH:MM"|null }].
+  /// Informational/display only — see `acceptingOrders` for the actual
+  /// checkout gate; hours do not themselves open/close order acceptance.
   workingHours      Json
+  /// IANA timezone the working-hours times above are expressed in. Never
+  /// inferred from the server's local timezone. Default is this
+  /// restaurant's actual location (Cairo, Egypt).
+  timezone          String   @default("Africa/Cairo")
+  /// Manual checkout gate (plan Phase 8). When false, checkout rejects new
+  /// orders with RESTAURANT_NOT_ACCEPTING_ORDERS regardless of workingHours —
+  /// this project does not auto-derive acceptance from hours.
+  acceptingOrders   Boolean  @default(true)
+  closedMessageAr   String?
+  closedMessageEn   String?
   isMaintenanceMode Boolean  @default(false)
   updatedAt         DateTime @updatedAt
+}
+
+/// ADMIN-managed delivery zone (plan Phase 8) — flat fee + minimum per named
+/// area, no polygons/coordinates/geofencing by design. Soft-deleted like
+/// Category/PromoCode (never hard-deleted), so an Order's deliveryZoneId FK
+/// (onDelete: SetNull) plus its name/fee snapshot on Order stay meaningful
+/// even after a zone is retired.
+model DeliveryZone {
+  id           String    @id @default(uuid()) @db.Uuid
+  nameAr       String
+  nameEn       String
+  deliveryFee  Decimal   @db.Decimal(10, 2)
+  minimumOrder Decimal   @db.Decimal(10, 2)
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  orders Order[]
+
+  @@index([isActive, sortOrder])
 }
 
 // ---------------------------------------------------------------------------

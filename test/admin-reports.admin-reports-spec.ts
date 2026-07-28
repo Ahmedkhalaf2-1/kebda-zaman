@@ -19,6 +19,7 @@ describe('Admin Reports (integration)', () => {
   let categoryId: string;
   let itemA: { id: string };
   let itemB: { id: string };
+  let deliveryZoneId: string;
   const cleanupUserIds: string[] = [];
 
   async function registerCustomer() {
@@ -68,7 +69,10 @@ describe('Admin Reports (integration)', () => {
       .send({
         ...opts,
         ...(opts.deliveryMethod === 'DELIVERY'
-          ? { deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' } }
+          ? {
+              deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
+              deliveryZoneId,
+            }
           : {}),
       });
     expect(res.status).toBe(201);
@@ -135,6 +139,11 @@ describe('Admin Reports (integration)', () => {
         basePrice: D('55.00'),
       },
     });
+
+    const zone = await prisma.deliveryZone.create({
+      data: { nameAr: 'منطقة التقارير', nameEn: 'Reports Zone', deliveryFee: D('10.00'), minimumOrder: D('0.00') },
+    });
+    deliveryZoneId = zone.id;
   });
 
   afterAll(async () => {
@@ -150,6 +159,7 @@ describe('Admin Reports (integration)', () => {
     await prisma.user.deleteMany({ where: { id: { in: cleanupUserIds } } });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
+    await prisma.deliveryZone.delete({ where: { id: deliveryZoneId } });
     await app.close();
   });
 
