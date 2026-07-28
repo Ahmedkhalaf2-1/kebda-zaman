@@ -525,8 +525,8 @@ model RestaurantSettings {
   workingHours      Json
   /// IANA timezone the working-hours times above are expressed in. Never
   /// inferred from the server's local timezone. Default is this
-  /// restaurant's actual location (Cairo, Egypt).
-  timezone          String   @default("Africa/Cairo")
+  /// restaurant's actual location (Jeddah, Saudi Arabia).
+  timezone          String   @default("Asia/Riyadh")
   /// Manual checkout gate (plan Phase 8). When false, checkout rejects new
   /// orders with RESTAURANT_NOT_ACCEPTING_ORDERS regardless of workingHours —
   /// this project does not auto-derive acceptance from hours.

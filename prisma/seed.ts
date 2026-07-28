@@ -8,7 +8,10 @@ import { PasswordService } from '../src/modules/auth/password.service';
  *
  * Idempotent: every row is upserted against a deterministic UUID derived from a
  * stable human-readable key, so re-running this script never creates duplicates
- * and safely refreshes values on each run.
+ * and safely refreshes values on each run — EXCEPT the RestaurantSettings
+ * singleton, which is create-only (see seedRestaurantSettings()) so that
+ * operational config an admin has edited via the admin API is never
+ * clobbered back to defaults by a redeploy.
  *
  * Contains only the baseline data required by BACKEND_IMPLEMENTATION_PLAN.md
  * Phase 1: the RestaurantSettings singleton, the initial categories, sample
@@ -23,11 +26,11 @@ import { PasswordService } from '../src/modules/auth/password.service';
  * (Authentication) concern.
  */
 
-const prisma = new PrismaClient();
+export const prisma = new PrismaClient();
 const passwordService = new PasswordService();
 
 /** Deterministic, collision-free UUID derived from a stable seed key. */
-function id(seedKey: string): string {
+export function id(seedKey: string): string {
   const hash = createHash('sha256').update(seedKey).digest('hex');
   return [
     hash.slice(0, 8),
@@ -260,29 +263,55 @@ const SEED_WEEKLY_HOURS = Array.from({ length: 7 }, (_, dayOfWeek) => ({
   closeTime: '02:00',
 }));
 
-async function seedRestaurantSettings(): Promise<void> {
-  const shared = {
-    restaurantNameAr: 'كبدة زمان',
-    restaurantNameEn: 'Kebda Zaman',
-    logoUrl: null,
-    phone: '+20100000000',
-    addressAr: 'القاهرة، مصر',
-    addressEn: 'Cairo, Egypt',
-    taxRatePercent: money(14),
-    deliveryFee: money(20),
-    minOrderAmount: money(50),
-    currency: 'EGP',
-    workingHours: SEED_WEEKLY_HOURS,
-    timezone: 'Africa/Cairo',
-    isMaintenanceMode: false,
-    acceptingOrders: true,
-    closedMessageAr: null,
-    closedMessageEn: null,
-  };
-  await prisma.restaurantSettings.upsert({
-    where: { singleton: true },
-    update: shared,
-    create: { id: id('restaurant-settings:singleton'), singleton: true, ...shared },
+/**
+ * First-time defaults for the RestaurantSettings singleton. These are
+ * intentionally generic Saudi Arabia placeholder values (a round,
+ * clearly-not-real phone number and the city of Jeddah) — not a real
+ * address or phone number — since an admin is expected to replace them via
+ * the admin settings API once the restaurant is live. See
+ * seedRestaurantSettings() for why these are only ever written once.
+ */
+export const RESTAURANT_SETTINGS_DEFAULTS = {
+  restaurantNameAr: 'كبدة زمان',
+  restaurantNameEn: 'Kebda Zaman',
+  logoUrl: null,
+  phone: '+966500000000',
+  addressAr: 'جدة، المملكة العربية السعودية',
+  addressEn: 'Jeddah, Saudi Arabia',
+  taxRatePercent: money(14),
+  deliveryFee: money(20),
+  minOrderAmount: money(50),
+  currency: 'SAR',
+  workingHours: SEED_WEEKLY_HOURS,
+  timezone: 'Asia/Riyadh',
+  isMaintenanceMode: false,
+  acceptingOrders: true,
+  closedMessageAr: null,
+  closedMessageEn: null,
+};
+
+/**
+ * Creates the RestaurantSettings singleton the first time the seed runs, and
+ * does nothing on every subsequent run.
+ *
+ * This is deliberately NOT an upsert: an upsert's `update` block would
+ * rewrite every admin-editable operational field (phone, address, currency,
+ * tax rate, delivery fee, minimum order, working hours, ...) back to the
+ * hardcoded defaults on every deploy, silently discarding whatever an admin
+ * configured via PUT /admin/settings. Once a row exists, this function
+ * leaves it completely untouched.
+ */
+export async function seedRestaurantSettings(client: PrismaClient = prisma): Promise<void> {
+  const existing = await client.restaurantSettings.findFirst({ where: { singleton: true } });
+  if (existing) {
+    return;
+  }
+  await client.restaurantSettings.create({
+    data: {
+      id: id('restaurant-settings:singleton'),
+      singleton: true,
+      ...RESTAURANT_SETTINGS_DEFAULTS,
+    },
   });
 }
 
@@ -490,11 +519,17 @@ async function main(): Promise<void> {
   );
 }
 
-main()
-  .catch((error: unknown) => {
-    console.error('Seed failed:', error);
-    process.exitCode = 1;
-  })
-  .finally(() => {
-    void prisma.$disconnect();
-  });
+// Only run when executed directly (`npm run seed` / `ts-node prisma/seed.ts`),
+// not when this module is imported (e.g. by tests exercising
+// seedRestaurantSettings() in isolation) — importing must never have the
+// side effect of seeding categories/menu items/admin accounts.
+if (require.main === module) {
+  main()
+    .catch((error: unknown) => {
+      console.error('Seed failed:', error);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      void prisma.$disconnect();
+    });
+}
