@@ -7,7 +7,7 @@ import { OrdersService } from './orders.service';
 import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 
-@Roles('ADMIN')
+@Roles('ADMIN', 'CASHIER')
 @Controller({ path: 'admin/orders', version: '1' })
 export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}

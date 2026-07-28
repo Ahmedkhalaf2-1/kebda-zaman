@@ -9,5 +9,6 @@ import { BruteForceService } from './brute-force.service';
 @Module({
   controllers: [AuthController, AdminAuthController],
   providers: [AuthService, TokenService, PasswordService, BruteForceService],
+  exports: [PasswordService],
 })
 export class AuthModule {}
