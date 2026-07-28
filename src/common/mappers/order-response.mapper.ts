@@ -38,7 +38,7 @@ export const FRONTEND_STATUS_TO_ORDER_STATUS: Record<string, OrderStatus> = {
  * Lowercased for consistency with the status-casing convention above;
  * revisit once the real model is available.
  */
-const PAYMENT_METHOD_TO_FRONTEND: Record<PaymentMethod, string> = {
+export const PAYMENT_METHOD_TO_FRONTEND: Record<PaymentMethod, string> = {
   CASH: 'cash',
   CARD: 'card',
   WALLET: 'wallet',
