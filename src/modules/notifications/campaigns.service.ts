@@ -125,8 +125,12 @@ export class CampaignsService {
    * flaky FCM call can never crash the request or the scheduler tick.
    */
   async dispatch(campaign: NotificationCampaign): Promise<NotificationCampaign> {
+    // Declared outside the try so the catch block can still report how many
+    // recipients were resolved before a later step (e.g. the FCM call
+    // itself) threw.
+    let tokens: string[] = [];
     try {
-      const tokens = await this.resolveAudienceTokens(campaign.targetAudience);
+      tokens = await this.resolveAudienceTokens(campaign.targetAudience);
       const payload: AppNotificationPayload = {
         id: campaign.id,
         type: campaign.type as NotificationType,
@@ -139,20 +143,49 @@ export class CampaignsService {
       };
       const result = await this.notificationsService.sendToTokens(tokens, payload);
 
+      // A campaign with resolved recipients but zero successful deliveries must
+      // never be recorded as SENT — that would silently mask e.g. Firebase
+      // being unconfigured/disabled in production, or a total FCM outage,
+      // behind a false "success" status. (0 recipients still counts as SENT:
+      // there was nothing to fail.)
+      const fullyFailed = tokens.length > 0 && result.successCount === 0 && result.failureCount > 0;
+      if (fullyFailed) {
+        this.logger.warn(
+          `Campaign ${campaign.id} resolved ${tokens.length} recipient(s) but delivered to none ` +
+            `(Firebase unconfigured or FCM rejected every send) — recording as FAILED, not SENT.`,
+        );
+      } else if (result.successCount > 0 && result.failureCount > 0) {
+        // Partial delivery. The CampaignStatus enum has no PARTIALLY_SENT
+        // value, so this is recorded as SENT (some devices did receive it)
+        // with deliveredCount below totalRecipients reflecting the shortfall
+        // honestly — it is never rounded up to "everyone got it".
+        this.logger.warn(
+          `Campaign ${campaign.id} partially delivered: ${result.successCount}/${tokens.length} ` +
+            `succeeded, ${result.failureCount} failed.`,
+        );
+      }
+
       return await this.prisma.notificationCampaign.update({
         where: { id: campaign.id },
         data: {
-          status: 'SENT',
-          sentAt: new Date(),
+          status: fullyFailed ? 'FAILED' : 'SENT',
+          sentAt: fullyFailed ? null : new Date(),
           totalRecipients: tokens.length,
           deliveredCount: result.successCount,
         },
       });
     } catch (error) {
+      // Log only the error message — never the resolved tokens or any
+      // Firebase credential material.
       this.logger.error(`Campaign ${campaign.id} failed to send: ${(error as Error).message}`);
       return this.prisma.notificationCampaign.update({
         where: { id: campaign.id },
-        data: { status: 'FAILED' },
+        data: {
+          status: 'FAILED',
+          sentAt: null,
+          totalRecipients: tokens.length,
+          deliveredCount: 0,
+        },
       });
     }
   }
