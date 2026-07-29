@@ -1,10 +1,12 @@
 import {
+  DeliveryMethod,
   Order,
   OrderItem,
   OrderItemCustomization,
   OrderStatus,
   OrderStatusHistory,
   PaymentMethod,
+  PaymentStatus,
   User,
 } from '@prisma/client';
 import { toUserResponse, UserResponseDto } from './user-response.mapper';
@@ -151,7 +153,9 @@ export interface OrderResponseDto {
   items: OrderItemResponseDto[];
   status: string;
   deliveryAddress: unknown;
+  deliveryMethod: DeliveryMethod;
   paymentMethod: string;
+  paymentStatus: PaymentStatus;
   subtotal: number;
   deliveryFee: number;
   tax: number;
@@ -182,7 +186,9 @@ export function toOrderResponse(
     items: order.items.map(toOrderItemResponse),
     status: ORDER_STATUS_TO_FRONTEND[order.status],
     deliveryAddress: order.deliveryAddressJson,
+    deliveryMethod: order.deliveryMethod,
     paymentMethod: PAYMENT_METHOD_TO_FRONTEND[order.paymentMethod],
+    paymentStatus: order.paymentStatus,
     subtotal: order.subtotal.toNumber(),
     deliveryFee: order.deliveryFee.toNumber(),
     tax: order.tax.toNumber(),

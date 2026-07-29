@@ -201,6 +201,10 @@ describe('Orders & Checkout (integration)', () => {
       expect(res.body.items).toHaveLength(1);
       expect(res.body.items[0].menuItem.nameEn).toBe('Checkout Item');
       expect(res.body.paymentMethod).toBe('cash');
+      // Order response contract (deliveryMethod/paymentStatus) — a PICKUP,
+      // freshly-checked-out order is PICKUP/PENDING.
+      expect(res.body.deliveryMethod).toBe('PICKUP');
+      expect(res.body.paymentStatus).toBe('PENDING');
 
       const cart = await request(app.getHttpServer())
         .get('/api/v1/cart')
@@ -496,6 +500,10 @@ describe('Orders & Checkout (integration)', () => {
         .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
       expect(second.status).toBe(201);
       expect(second.body.id).toBe(first.body.id);
+      // The replayed response must carry the same order-response-contract
+      // fields as the original — not silently drop them on the replay path.
+      expect(second.body.deliveryMethod).toBe(first.body.deliveryMethod);
+      expect(second.body.paymentStatus).toBe(first.body.paymentStatus);
 
       const orderCount = await prisma.order.count({ where: { userId: user.id } });
       expect(orderCount).toBe(1);
@@ -601,6 +609,10 @@ describe('Orders & Checkout (integration)', () => {
       expect(res.body.deliveryFee).toBeGreaterThan(0);
       expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
       expect(res.body.deliveryZone).toMatchObject({ id: deliveryZoneId, nameEn: 'Test Zone' });
+      // Order response contract: a DELIVERY checkout must report
+      // deliveryMethod: 'DELIVERY' (never fall back to the client default).
+      expect(res.body.deliveryMethod).toBe('DELIVERY');
+      expect(res.body.paymentStatus).toBe('PENDING');
     });
 
     it('rejects a DELIVERY checkout without a deliveryZoneId', async () => {

@@ -184,6 +184,42 @@ describe('Admin Orders (integration)', () => {
         .set('Authorization', `Bearer ${admin.accessToken}`);
       expect(res.status).toBe(404);
     });
+
+    it('reports deliveryMethod and paymentStatus on both the list and detail response', async () => {
+      const admin = await registerAdmin();
+      const customer = await registerCustomer();
+      const order = await placeOrder(customer.accessToken); // PICKUP / CASH -> PENDING
+
+      // placeOrder() checks out as PICKUP with the CASH payment method, so the
+      // fresh order is PICKUP/PENDING — assert that first (regression for the
+      // response-contract gap: deliveryMethod/paymentStatus were previously
+      // absent from OrderResponseDto entirely).
+      const detailPending = await request(app.getHttpServer())
+        .get(`/api/v1/admin/orders/${order.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+      expect(detailPending.status).toBe(200);
+      expect(detailPending.body.deliveryMethod).toBe('PICKUP');
+      expect(detailPending.body.paymentStatus).toBe('PENDING');
+
+      // Simulate a completed payment (the payments webhook flow itself is
+      // out of scope for this fix) and confirm the mapper surfaces the new
+      // status on both the admin list and detail responses.
+      await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: 'PAID' } });
+
+      const detailPaid = await request(app.getHttpServer())
+        .get(`/api/v1/admin/orders/${order.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+      expect(detailPaid.status).toBe(200);
+      expect(detailPaid.body.deliveryMethod).toBe('PICKUP');
+      expect(detailPaid.body.paymentStatus).toBe('PAID');
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/admin/orders')
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+      expect(list.status).toBe(200);
+      const listed = list.body.find((o: { id: string }) => o.id === order.id);
+      expect(listed).toMatchObject({ deliveryMethod: 'PICKUP', paymentStatus: 'PAID' });
+    });
   });
 
   // ===========================================================================
