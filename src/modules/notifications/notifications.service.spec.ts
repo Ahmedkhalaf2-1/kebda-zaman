@@ -255,4 +255,49 @@ describe('NotificationsService — FCM multicast batching', () => {
     expect(sendEachForMulticast.mock.calls[1][0].tokens).toHaveLength(100);
     expect(result).toEqual({ successCount: 600, failureCount: 0, invalidTokens: [] });
   });
+
+  it('sendOrderStatusNotification passes deliveryMethod into the payload builder, producing ' +
+    'pickup-specific wording for a PICKUP order', async () => {
+    prisma.deviceToken.findMany.mockResolvedValue([{ token: 'token-0' }]);
+    const sendEachForMulticast = jest
+      .fn()
+      .mockResolvedValue({ successCount: 1, failureCount: 0, responses: successResponses(1) });
+    getMessaging.mockReturnValue({ sendEachForMulticast });
+    const service = makeService();
+
+    await service.sendOrderStatusNotification({
+      id: 'order-1',
+      userId: 'user-1',
+      status: 'OUT_FOR_DELIVERY',
+      deliveryMethod: 'PICKUP',
+    });
+
+    expect(sendEachForMulticast.mock.calls[0][0].data).toMatchObject({
+      type: 'order_ready',
+      title: 'Order ready for pickup',
+      body: 'Your order is ready to be collected.',
+    });
+  });
+
+  it('sendOrderStatusNotification keeps delivery wording for a DELIVERY order', async () => {
+    prisma.deviceToken.findMany.mockResolvedValue([{ token: 'token-0' }]);
+    const sendEachForMulticast = jest
+      .fn()
+      .mockResolvedValue({ successCount: 1, failureCount: 0, responses: successResponses(1) });
+    getMessaging.mockReturnValue({ sendEachForMulticast });
+    const service = makeService();
+
+    await service.sendOrderStatusNotification({
+      id: 'order-1',
+      userId: 'user-1',
+      status: 'OUT_FOR_DELIVERY',
+      deliveryMethod: 'DELIVERY',
+    });
+
+    expect(sendEachForMulticast.mock.calls[0][0].data).toMatchObject({
+      type: 'order_out_for_delivery',
+      title: 'Order out for delivery',
+      body: 'Your order is on its way.',
+    });
+  });
 });

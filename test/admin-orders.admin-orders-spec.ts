@@ -255,11 +255,16 @@ describe('Admin Orders (integration)', () => {
       expect(mockSendOrderStatusNotification).toHaveBeenCalledTimes(4);
       expect(mockSendOrderStatusNotification).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ id: order.id, userId: customer.user.id, status: 'CONFIRMED' }),
+        expect.objectContaining({
+          id: order.id,
+          userId: customer.user.id,
+          status: 'CONFIRMED',
+          deliveryMethod: 'PICKUP',
+        }),
       );
       expect(mockSendOrderStatusNotification).toHaveBeenNthCalledWith(
         4,
-        expect.objectContaining({ status: 'DELIVERED' }),
+        expect.objectContaining({ status: 'DELIVERED', deliveryMethod: 'PICKUP' }),
       );
 
       const history = await prisma.orderStatusHistory.findMany({

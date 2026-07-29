@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { OrderStatus } from '@prisma/client';
+import { DeliveryMethod, OrderStatus } from '@prisma/client';
 
 /** The 14 types the Flutter `NotificationType` enum parses (audit §12). */
 export const NOTIFICATION_TYPES = [
@@ -63,15 +63,22 @@ export function toFcmDataPayload(payload: AppNotificationPayload): Record<string
   return data;
 }
 
+type OrderStatusNotificationConfig = { type: NotificationType; title: string; body: string };
+
 /**
- * DB OrderStatus -> notification content. READY has no DB status (plan
- * §7.1 D2a Option A — deferred, admin-only sub-state) so it's not mapped
- * here; a future Phase 7 admin flow can send `order_ready` directly without
- * needing a matching OrderStatus value.
+ * DB OrderStatus -> notification content shared by both delivery methods.
+ * READY has no DB status (plan §7.1 D2a Option A — deferred, admin-only
+ * sub-state) so it's not mapped here; a future Phase 7 admin flow can send
+ * `order_ready` directly without needing a matching OrderStatus value.
+ *
+ * OUT_FOR_DELIVERY and DELIVERED are intentionally absent here — the DB
+ * state machine (PREPARING -> OUT_FOR_DELIVERY -> DELIVERED) is identical
+ * for DELIVERY and PICKUP orders, but a PICKUP order reaching those two
+ * statuses is presented to the customer as "ready for pickup" / "picked up"
+ * rather than "out for delivery" / "delivered" — see
+ * DELIVERY_STATUS_NOTIFICATION / PICKUP_STATUS_NOTIFICATION below.
  */
-const ORDER_STATUS_NOTIFICATION: Partial<
-  Record<OrderStatus, { type: NotificationType; title: string; body: string }>
-> = {
+const SHARED_ORDER_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
   PENDING: { type: 'order_created', title: 'Order placed', body: 'Your order has been received.' },
   CONFIRMED: {
     type: 'order_confirmed',
@@ -83,6 +90,14 @@ const ORDER_STATUS_NOTIFICATION: Partial<
     title: 'Order in progress',
     body: 'Your order is being prepared.',
   },
+  CANCELLED: {
+    type: 'order_cancelled',
+    title: 'Order cancelled',
+    body: 'Your order has been cancelled.',
+  },
+};
+
+const DELIVERY_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
   OUT_FOR_DELIVERY: {
     type: 'order_out_for_delivery',
     title: 'Order out for delivery',
@@ -93,18 +108,29 @@ const ORDER_STATUS_NOTIFICATION: Partial<
     title: 'Order delivered',
     body: 'Your order has been delivered. Enjoy!',
   },
-  CANCELLED: {
-    type: 'order_cancelled',
-    title: 'Order cancelled',
-    body: 'Your order has been cancelled.',
+};
+
+const PICKUP_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
+  OUT_FOR_DELIVERY: {
+    type: 'order_ready',
+    title: 'Order ready for pickup',
+    body: 'Your order is ready to be collected.',
+  },
+  DELIVERED: {
+    type: 'order_delivered',
+    title: 'Order picked up',
+    body: 'Your order has been picked up. Enjoy!',
   },
 };
 
 export function buildOrderStatusPayload(
   orderId: string,
   status: OrderStatus,
+  deliveryMethod: DeliveryMethod,
 ): AppNotificationPayload | null {
-  const config = ORDER_STATUS_NOTIFICATION[status];
+  const perMethodConfig =
+    deliveryMethod === 'PICKUP' ? PICKUP_STATUS_NOTIFICATION : DELIVERY_STATUS_NOTIFICATION;
+  const config = SHARED_ORDER_STATUS_NOTIFICATION[status] ?? perMethodConfig[status];
   if (!config) {
     return null;
   }

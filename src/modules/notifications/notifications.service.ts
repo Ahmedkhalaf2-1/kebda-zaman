@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
+import { DeliveryMethod, OrderStatus } from '@prisma/client';
 import type { App } from 'firebase-admin/app';
 import { getMessaging, type SendResponse } from 'firebase-admin/messaging';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -184,8 +184,9 @@ export class NotificationsService {
     id: string;
     userId: string;
     status: OrderStatus;
+    deliveryMethod: DeliveryMethod;
   }): Promise<SendResult> {
-    const payload = buildOrderStatusPayload(order.id, order.status);
+    const payload = buildOrderStatusPayload(order.id, order.status, order.deliveryMethod);
     if (!payload) {
       return { successCount: 0, failureCount: 0, invalidTokens: [] };
     }

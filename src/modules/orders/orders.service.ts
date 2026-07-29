@@ -540,6 +540,7 @@ export class OrdersService {
         id: updated.id,
         userId: updated.userId,
         status: updated.status,
+        deliveryMethod: updated.deliveryMethod,
       });
     } catch (error) {
       this.logger.warn(
