@@ -55,7 +55,11 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
   refresh(@Body() dto: RefreshDto, @Req() req: Request) {
-    return this.authService.refresh(dto.refreshToken, extractRequestMeta(req));
+    return this.authService.refresh(
+      dto.refreshToken,
+      extractRequestMeta(req),
+      dto.deviceToken,
+    );
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)

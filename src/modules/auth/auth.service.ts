@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
@@ -22,6 +23,8 @@ export interface AuthResult {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwordService: PasswordService,
@@ -114,8 +117,23 @@ export class AuthService {
   async refresh(
     rawRefreshToken: string,
     meta: RequestMeta,
+    deviceToken?: string,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    return this.tokenService.rotateRefreshToken(rawRefreshToken, meta);
+    try {
+      return await this.tokenService.rotateRefreshToken(rawRefreshToken, meta);
+    } catch (error) {
+      if (error instanceof UnauthorizedException && deviceToken) {
+        try {
+          await this.prisma.deviceToken.updateMany({
+            where: { token: deviceToken, isActive: true },
+            data: { isActive: false },
+          });
+        } catch (cleanupError) {
+          this.logger.warn('Failed to deactivate device token after rejected refresh');
+        }
+      }
+      throw error;
+    }
   }
 
   async logout(userId: string, rawRefreshToken?: string): Promise<void> {
