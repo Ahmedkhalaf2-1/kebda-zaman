@@ -1,7 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { DeliveryMethod, OrderStatus } from '@prisma/client';
 import type { App } from 'firebase-admin/app';
-import { getMessaging, type SendResponse } from 'firebase-admin/messaging';
+import {
+  getMessaging,
+  type ApnsConfig,
+  type MulticastMessage,
+  type SendResponse,
+} from 'firebase-admin/messaging';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
 import {
@@ -24,6 +29,43 @@ const INVALID_TOKEN_ERROR_CODES = new Set([
 
 /** FCM multicast requests reject more than 500 registration tokens per call. */
 const FCM_MULTICAST_BATCH_SIZE = 500;
+
+/**
+ * Builds the APNs delivery config for a multicast message. Data-only pushes
+ * (no `notification` block) need `apns-push-type: background` plus
+ * `content-available: 1` so APNs treats them as a silent background
+ * notification instead of silently dropping them; notification+data pushes
+ * need `apns-push-type: alert` so APNs displays the alert derived from the
+ * top-level `notification` block, plus a sound.
+ */
+function buildApnsConfig(hasNotification: boolean): ApnsConfig {
+  if (hasNotification) {
+    return {
+      headers: {
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+      },
+      payload: {
+        aps: {
+          contentAvailable: true,
+          sound: 'default',
+        },
+      },
+    };
+  }
+
+  return {
+    headers: {
+      'apns-push-type': 'background',
+      'apns-priority': '5',
+    },
+    payload: {
+      aps: {
+        contentAvailable: true,
+      },
+    },
+  };
+}
 
 @Injectable()
 export class NotificationsService {
@@ -119,6 +161,8 @@ export class NotificationsService {
       batches.push(tokens.slice(i, i + FCM_MULTICAST_BATCH_SIZE));
     }
 
+    const apns = buildApnsConfig(!!message.notification);
+
     let successCount = 0;
     let failureCount = 0;
     const invalidTokens = new Set<string>();
@@ -127,11 +171,13 @@ export class NotificationsService {
       const batchTokens = batches[batchIndex];
       let response;
       try {
-        response = await getMessaging(this.firebaseApp).sendEachForMulticast({
+        const multicastMessage: MulticastMessage = {
           tokens: batchTokens,
           data: message.data,
           ...(message.notification ? { notification: message.notification } : {}),
-        });
+          apns,
+        };
+        response = await getMessaging(this.firebaseApp).sendEachForMulticast(multicastMessage);
       } catch (error) {
         // Only counts/indices — never token values or Firebase credentials.
         this.logger.error(

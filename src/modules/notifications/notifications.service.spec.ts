@@ -300,4 +300,105 @@ describe('NotificationsService — FCM multicast batching', () => {
       body: 'Your order is on its way.',
     });
   });
+
+  describe('APNs delivery configuration', () => {
+    it('data-only send includes background push-type/priority and contentAvailable, ' +
+      'with no aps.sound', async () => {
+      const tokens = makeTokens(1);
+      const sendEachForMulticast = jest
+        .fn()
+        .mockResolvedValue({ successCount: 1, failureCount: 0, responses: successResponses(1) });
+      getMessaging.mockReturnValue({ sendEachForMulticast });
+      const service = makeService();
+
+      await service.sendToTokens(tokens, CUSTOMER_PAYLOAD);
+
+      const sentMessage = sendEachForMulticast.mock.calls[0][0];
+      expect(sentMessage.notification).toBeUndefined();
+      expect(sentMessage.apns).toEqual({
+        headers: {
+          'apns-push-type': 'background',
+          'apns-priority': '5',
+        },
+        payload: {
+          aps: {
+            contentAvailable: true,
+          },
+        },
+      });
+      expect(sentMessage.apns.payload.aps.sound).toBeUndefined();
+    });
+
+    it('notification+data send includes alert push-type/priority, contentAvailable, ' +
+      'sound "default", and leaves the top-level notification/data payload unchanged', async () => {
+      prisma.deviceToken.findMany.mockResolvedValue([{ token: 'token-0' }]);
+      const sendEachForMulticast = jest
+        .fn()
+        .mockResolvedValue({ successCount: 1, failureCount: 0, responses: successResponses(1) });
+      getMessaging.mockReturnValue({ sendEachForMulticast });
+      const service = makeService();
+
+      await service.sendAdminNewOrderNotification({
+        notificationId: 'notif-1',
+        orderId: 'order-1',
+        orderNumber: 'ORD-1',
+        customerName: 'Ahmed',
+      });
+
+      const sentMessage = sendEachForMulticast.mock.calls[0][0];
+      expect(sentMessage.apns).toEqual({
+        headers: {
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+        },
+        payload: {
+          aps: {
+            contentAvailable: true,
+            sound: 'default',
+          },
+        },
+      });
+      expect(sentMessage.notification).toEqual({
+        title: 'New order received',
+        body: 'Ahmed placed order ORD-1',
+      });
+      expect(sentMessage.data).toEqual({
+        type: 'NEW_ORDER',
+        notificationId: 'notif-1',
+        orderId: 'order-1',
+        orderNumber: 'ORD-1',
+      });
+    });
+
+    it('applies the APNs config to every batch when sending to 501+ tokens', async () => {
+      const tokens = makeTokens(501);
+      const sendEachForMulticast = jest
+        .fn()
+        .mockResolvedValueOnce({
+          successCount: 500,
+          failureCount: 0,
+          responses: successResponses(500),
+        })
+        .mockResolvedValueOnce({ successCount: 1, failureCount: 0, responses: successResponses(1) });
+      getMessaging.mockReturnValue({ sendEachForMulticast });
+      const service = makeService();
+
+      await service.sendToTokens(tokens, CUSTOMER_PAYLOAD);
+
+      expect(sendEachForMulticast).toHaveBeenCalledTimes(2);
+      const expectedApns = {
+        headers: {
+          'apns-push-type': 'background',
+          'apns-priority': '5',
+        },
+        payload: {
+          aps: {
+            contentAvailable: true,
+          },
+        },
+      };
+      expect(sendEachForMulticast.mock.calls[0][0].apns).toEqual(expectedApns);
+      expect(sendEachForMulticast.mock.calls[1][0].apns).toEqual(expectedApns);
+    });
+  });
 });
