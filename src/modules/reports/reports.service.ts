@@ -12,11 +12,20 @@ const ALL_ORDER_STATUSES: OrderStatus[] = [
   'CONFIRMED',
   'PREPARING',
   'OUT_FOR_DELIVERY',
+  'READY_FOR_PICKUP',
   'DELIVERED',
+  'PICKED_UP',
   'CANCELLED',
 ];
 const ALL_DELIVERY_METHODS: DeliveryMethod[] = ['DELIVERY', 'PICKUP'];
 const ALL_PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'CARD', 'WALLET'];
+
+/** Terminal-success statuses across both fulfillment methods (Fix 12A) —
+ * DELIVERED for DELIVERY orders, PICKED_UP for PICKUP orders. Revenue and
+ * "completed order" analytics must count both; a DELIVERY-only count (e.g.
+ * an "orders out for delivery" operational metric) must never include
+ * PICKED_UP, and vice versa — but no such metric exists in this file today. */
+const COMPLETED_ORDER_STATUSES: OrderStatus[] = ['DELIVERED', 'PICKED_UP'];
 
 export interface ReportOverviewDto {
   totalRevenue: number;
@@ -72,7 +81,7 @@ export class ReportsService {
     ] = await Promise.all([
       this.prisma.order.count({ where: whereBase }),
       this.prisma.order.aggregate({
-        where: { ...whereBase, status: OrderStatus.DELIVERED },
+        where: { ...whereBase, status: { in: COMPLETED_ORDER_STATUSES } },
         _sum: { totalAmount: true },
         _count: { _all: true },
       }),
@@ -85,6 +94,10 @@ export class ReportsService {
       }),
     ]);
 
+    // Named `deliveredOrders` for API-contract stability, but counts every
+    // COMPLETED_ORDER_STATUSES member (DELIVERED + PICKED_UP) — this is the
+    // "completed orders" figure the revenue/average-order-value math below
+    // is actually built on.
     const deliveredOrders = deliveredAgg._count._all;
     const totalRevenue = deliveredAgg._sum.totalAmount?.toNumber() ?? 0;
     const averageOrderValue = deliveredOrders > 0 ? totalRevenue / deliveredOrders : 0;
@@ -134,7 +147,7 @@ export class ReportsService {
       const bucket = buckets.get(key);
       if (!bucket) continue;
       bucket.orderCount += 1;
-      if (order.status === OrderStatus.DELIVERED) {
+      if (COMPLETED_ORDER_STATUSES.includes(order.status)) {
         bucket.deliveredOrderCount += 1;
         bucket.revenue += order.totalAmount.toNumber();
       }
@@ -178,7 +191,7 @@ export class ReportsService {
       where: {
         menuItemId: { not: null },
         order: {
-          status: OrderStatus.DELIVERED,
+          status: { in: COMPLETED_ORDER_STATUSES },
           ...(createdAtFilter ? { createdAt: createdAtFilter } : {}),
         },
       },

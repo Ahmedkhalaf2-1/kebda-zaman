@@ -7,7 +7,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DeliveryZone, OrderStatus, Prisma } from '@prisma/client';
+import { DeliveryMethod, DeliveryZone, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -43,15 +43,51 @@ const orderInclude = {
 
 const MAX_ORDER_NUMBER_ATTEMPTS = 5;
 
-/** Forward transitions + cancellation rules (plan §7.5). No READY: see D2a. */
-const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+/**
+ * Forward transitions + cancellation rules (plan §7.5), split per delivery
+ * method (Fix 12A) — a DELIVERY order is handed to a courier
+ * (OUT_FOR_DELIVERY -> DELIVERED); a PICKUP order is staged at the counter
+ * (READY_FOR_PICKUP -> PICKED_UP). The two lifecycles never cross: a PICKUP
+ * order can never reach OUT_FOR_DELIVERY/DELIVERED and a DELIVERY order can
+ * never reach READY_FOR_PICKUP/PICKED_UP. CANCELLED remains reachable from
+ * every non-terminal status in both maps.
+ */
+const DELIVERY_ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   PENDING: ['CONFIRMED', 'CANCELLED'],
   CONFIRMED: ['PREPARING', 'CANCELLED'],
   PREPARING: ['OUT_FOR_DELIVERY', 'CANCELLED'],
   OUT_FOR_DELIVERY: ['DELIVERED', 'CANCELLED'],
+  READY_FOR_PICKUP: [],
   DELIVERED: [],
+  PICKED_UP: [],
   CANCELLED: [],
 };
+
+const PICKUP_ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  PENDING: ['CONFIRMED', 'CANCELLED'],
+  CONFIRMED: ['PREPARING', 'CANCELLED'],
+  PREPARING: ['READY_FOR_PICKUP', 'CANCELLED'],
+  READY_FOR_PICKUP: ['PICKED_UP', 'CANCELLED'],
+  OUT_FOR_DELIVERY: [],
+  DELIVERED: [],
+  PICKED_UP: [],
+  CANCELLED: [],
+};
+
+/** Method-aware transition resolver — the single source of truth `updateOrderStatus` validates against. */
+function getAllowedTransitions(
+  deliveryMethod: DeliveryMethod,
+  currentStatus: OrderStatus,
+): readonly OrderStatus[] {
+  return deliveryMethod === 'PICKUP'
+    ? PICKUP_ALLOWED_TRANSITIONS[currentStatus]
+    : DELIVERY_ALLOWED_TRANSITIONS[currentStatus];
+}
+
+/** A completed order — the only statuses that settle payment + earn loyalty (plan §9 DoD, Fix 12A). */
+function isTerminalCompletion(status: OrderStatus): boolean {
+  return status === 'DELIVERED' || status === 'PICKED_UP';
+}
 
 @Injectable()
 export class OrdersService {
@@ -476,11 +512,17 @@ export class OrdersService {
   }
 
   /**
-   * ADMIN status transition (plan §7.5). Validates against the allowed
-   * transition map, writes the order update + OrderStatusHistory row in one
-   * transaction, then fires the Phase 6 notification infrastructure
-   * *after* that commit — a notification failure is logged, never allowed
-   * to roll back or fail the already-committed status change.
+   * ADMIN status transition (plan §7.5). Validates against the
+   * delivery-method-aware transition map (Fix 12A —
+   * `getAllowedTransitions`), then claims the transition with an optimistic-concurrency
+   * `updateMany` (guarded on the originally-read status) before writing the
+   * OrderStatusHistory row — both in the same transaction. Two admins racing
+   * from the same original status can both pass validation, but only one can
+   * win the conditional claim; the other gets a 409 and never writes history
+   * or fires any post-commit side effect. The Phase 6 notification
+   * infrastructure still fires *after* that commit — a notification failure
+   * is logged, never allowed to roll back or fail the already-committed
+   * status change.
    */
   async updateOrderStatus(
     orderId: string,
@@ -493,19 +535,41 @@ export class OrdersService {
       throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
     }
 
-    if (!ALLOWED_TRANSITIONS[existing.status].includes(newStatus)) {
+    if (!getAllowedTransitions(existing.deliveryMethod, existing.status).includes(newStatus)) {
       throw new UnprocessableEntityException({
-        message: `Cannot transition order from ${existing.status} to ${newStatus}`,
+        message: `Cannot transition a ${existing.deliveryMethod} order from ${existing.status} to ${newStatus}`,
         code: 'INVALID_STATUS_TRANSITION',
       });
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.order.update({
-        where: { id: orderId },
-        data: { status: newStatus },
-        include: orderInclude,
+      // Optimistic concurrency claim: only succeeds if the order's status is
+      // still exactly what we read above (`existing.status`). If a second
+      // concurrent request already changed it, `count` comes back 0 — no row
+      // gets updated, so we never overwrite a status neither of us actually
+      // observed live.
+      const claimed = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: existing.status,
+        },
+        data: {
+          status: newStatus,
+        },
       });
+
+      if (claimed.count !== 1) {
+        const current = await tx.order.findUnique({ where: { id: orderId } });
+        throw new ConflictException({
+          message: 'Order status changed before this update could be applied',
+          code: 'ORDER_STATUS_CHANGED',
+          details: {
+            expectedStatus: existing.status,
+            currentStatus: current?.status ?? null,
+          },
+        });
+      }
+
       await tx.orderStatusHistory.create({
         data: {
           orderId,
@@ -515,10 +579,18 @@ export class OrdersService {
           note: note ?? null,
         },
       });
+
+      const result = await tx.order.findUnique({ where: { id: orderId }, include: orderInclude });
+      if (!result) {
+        throw new InternalServerErrorException({
+          message: 'Order could not be reloaded after a committed status update',
+          code: 'ORDER_RELOAD_FAILED',
+        });
+      }
       return result;
     });
 
-    if (newStatus === 'DELIVERED') {
+    if (isTerminalCompletion(newStatus)) {
       try {
         await this.paymentsService.settleCashOnDelivery(orderId);
       } catch (error) {

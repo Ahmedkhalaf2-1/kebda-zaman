@@ -156,13 +156,14 @@ export class LoyaltyService {
   }
 
   /**
-   * Order-completion earning (plan §9 DoD). Called after an order's DELIVERED
-   * transition commits (OrdersService). Guests never accrue points; the
-   * `(orderId, reason)` unique constraint makes a second call for the same
-   * order a no-op instead of double-crediting.
+   * Order-completion earning (plan §9 DoD). Called after an order reaches a
+   * terminal-success status — DELIVERED for DELIVERY orders, PICKED_UP for
+   * PICKUP orders (Fix 12A) — commits (OrdersService). Guests never accrue
+   * points; the `(orderId, reason)` unique constraint makes a second call for
+   * the same order a no-op instead of double-crediting.
    */
   async earnForOrder(order: Order): Promise<void> {
-    if (order.status !== 'DELIVERED') {
+    if (order.status !== 'DELIVERED' && order.status !== 'PICKED_UP') {
       return;
     }
     const user = await this.prisma.user.findUnique({ where: { id: order.userId } });

@@ -363,22 +363,22 @@ describe('Phase 9: Addresses, Favorites, Loyalty (integration)', () => {
       expect(res.body.code).toBe('GUEST_NOT_ELIGIBLE');
     });
 
-    it('a guest order that reaches DELIVERED never earns loyalty points', async () => {
+    it('a guest order that reaches PICKED_UP never earns loyalty points', async () => {
       const guest = await registerGuest();
       const admin = await registerAdmin();
       const order = await checkout(guest.accessToken);
       await transitionOrder(order.id, admin.accessToken, [
         'confirmed',
         'preparing',
-        'outForDelivery',
-        'delivered',
+        'readyForPickup',
+        'pickedUp',
       ]);
 
       const account = await prisma.loyaltyAccount.findUnique({ where: { userId: guest.user.id } });
       expect(account).toBeNull();
     });
 
-    it('awards points when an order is DELIVERED, matching the server-computed total', async () => {
+    it('awards points when a PICKUP order is PICKED_UP, matching the server-computed total', async () => {
       const customer = await registerCustomer();
       const admin = await registerAdmin();
       const order = await checkout(customer.accessToken);
@@ -386,8 +386,8 @@ describe('Phase 9: Addresses, Favorites, Loyalty (integration)', () => {
       await transitionOrder(order.id, admin.accessToken, [
         'confirmed',
         'preparing',
-        'outForDelivery',
-        'delivered',
+        'readyForPickup',
+        'pickedUp',
       ]);
 
       const expectedPoints = Math.floor(order.totalAmount / 10);
@@ -410,8 +410,8 @@ describe('Phase 9: Addresses, Favorites, Loyalty (integration)', () => {
       await transitionOrder(order.id, admin.accessToken, [
         'confirmed',
         'preparing',
-        'outForDelivery',
-        'delivered',
+        'readyForPickup',
+        'pickedUp',
       ]);
 
       const beforeRetry = await prisma.loyaltyAccount.findUniqueOrThrow({
@@ -451,8 +451,8 @@ describe('Phase 9: Addresses, Favorites, Loyalty (integration)', () => {
       await transitionOrder(order.id, admin.accessToken, [
         'confirmed',
         'preparing',
-        'outForDelivery',
-        'delivered',
+        'readyForPickup',
+        'pickedUp',
       ]);
       const account = await prisma.loyaltyAccount.findUniqueOrThrow({
         where: { userId: customer.user.id },
@@ -508,8 +508,8 @@ describe('Phase 9: Addresses, Favorites, Loyalty (integration)', () => {
       await transitionOrder(order.id, admin.accessToken, [
         'confirmed',
         'preparing',
-        'outForDelivery',
-        'delivered',
+        'readyForPickup',
+        'pickedUp',
       ]);
       await request(app.getHttpServer())
         .post('/api/v1/me/loyalty/redeem')

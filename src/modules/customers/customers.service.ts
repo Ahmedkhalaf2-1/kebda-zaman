@@ -87,7 +87,9 @@ export class CustomersService {
     return customer;
   }
 
-  /** Batched per-customer order stats: count of all orders, spend from DELIVERED orders only. */
+  /** Batched per-customer order stats: count of all orders, spend from
+   * completed orders only — DELIVERED (DELIVERY) or PICKED_UP (PICKUP),
+   * the two terminal-success statuses (Fix 12A). */
   private async orderStatsByUser(userIds: string[]): Promise<Map<string, CustomerOrderStats>> {
     const map = new Map<string, CustomerOrderStats>();
     if (userIds.length === 0) {
@@ -105,7 +107,7 @@ export class CustomersService {
       }),
       this.prisma.order.groupBy({
         by: ['userId'],
-        where: { userId: { in: userIds }, status: 'DELIVERED' },
+        where: { userId: { in: userIds }, status: { in: ['DELIVERED', 'PICKED_UP'] } },
         _sum: { totalAmount: true },
       }),
     ]);

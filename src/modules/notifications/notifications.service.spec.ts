@@ -268,7 +268,7 @@ describe('NotificationsService — FCM multicast batching', () => {
     await service.sendOrderStatusNotification({
       id: 'order-1',
       userId: 'user-1',
-      status: 'OUT_FOR_DELIVERY',
+      status: 'READY_FOR_PICKUP',
       deliveryMethod: 'PICKUP',
     });
 

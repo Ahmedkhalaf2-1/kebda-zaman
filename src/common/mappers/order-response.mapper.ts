@@ -13,14 +13,19 @@ import { toUserResponse, UserResponseDto } from './user-response.mapper';
 
 /**
  * Frontend enum casing (plan §3.5 / D2): DB is UPPER_SNAKE, Flutter's
- * `OrderStatus` enum is lowerCamel. `outForDelivery` is the only irregular one.
+ * `OrderStatus` enum is lowerCamel. `outForDelivery` is the only irregular
+ * one. READY_FOR_PICKUP/PICKED_UP (Fix 12A) are the pickup-specific
+ * equivalents of OUT_FOR_DELIVERY/DELIVERED — never reachable by a DELIVERY
+ * order, so there is no casing ambiguity between the two lifecycles.
  */
 const ORDER_STATUS_TO_FRONTEND: Record<OrderStatus, string> = {
   PENDING: 'pending',
   CONFIRMED: 'confirmed',
   PREPARING: 'preparing',
   OUT_FOR_DELIVERY: 'outForDelivery',
+  READY_FOR_PICKUP: 'readyForPickup',
   DELIVERED: 'delivered',
+  PICKED_UP: 'pickedUp',
   CANCELLED: 'cancelled',
 };
 
@@ -30,7 +35,9 @@ export const FRONTEND_STATUS_TO_ORDER_STATUS: Record<string, OrderStatus> = {
   confirmed: 'CONFIRMED',
   preparing: 'PREPARING',
   outForDelivery: 'OUT_FOR_DELIVERY',
+  readyForPickup: 'READY_FOR_PICKUP',
   delivered: 'DELIVERED',
+  pickedUp: 'PICKED_UP',
   cancelled: 'CANCELLED',
 };
 

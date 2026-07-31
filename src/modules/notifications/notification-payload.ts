@@ -66,19 +66,14 @@ export function toFcmDataPayload(payload: AppNotificationPayload): Record<string
 type OrderStatusNotificationConfig = { type: NotificationType; title: string; body: string };
 
 /**
- * DB OrderStatus -> notification content shared by both delivery methods.
- * READY has no DB status (plan §7.1 D2a Option A — deferred, admin-only
- * sub-state) so it's not mapped here; a future Phase 7 admin flow can send
- * `order_ready` directly without needing a matching OrderStatus value.
- *
- * OUT_FOR_DELIVERY and DELIVERED are intentionally absent here — the DB
- * state machine (PREPARING -> OUT_FOR_DELIVERY -> DELIVERED) is identical
- * for DELIVERY and PICKUP orders, but a PICKUP order reaching those two
- * statuses is presented to the customer as "ready for pickup" / "picked up"
- * rather than "out for delivery" / "delivered" — see
- * DELIVERY_STATUS_NOTIFICATION / PICKUP_STATUS_NOTIFICATION below.
+ * DB OrderStatus -> notification content. Fix 12A split the state machine so
+ * OUT_FOR_DELIVERY/DELIVERED are DELIVERY-only and READY_FOR_PICKUP/PICKED_UP
+ * are PICKUP-only (OrdersService.getAllowedTransitions never lets one
+ * delivery method reach the other method's statuses) — every DB status now
+ * maps to exactly one piece of wording, so this is a single flat table
+ * instead of a shared-map-plus-per-method-override.
  */
-const SHARED_ORDER_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
+const ORDER_STATUS_NOTIFICATION: Record<OrderStatus, OrderStatusNotificationConfig> = {
   PENDING: { type: 'order_created', title: 'Order placed', body: 'Your order has been received.' },
   CONFIRMED: {
     type: 'order_confirmed',
@@ -90,6 +85,26 @@ const SHARED_ORDER_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusN
     title: 'Order in progress',
     body: 'Your order is being prepared.',
   },
+  OUT_FOR_DELIVERY: {
+    type: 'order_out_for_delivery',
+    title: 'Order out for delivery',
+    body: 'Your order is on its way.',
+  },
+  READY_FOR_PICKUP: {
+    type: 'order_ready',
+    title: 'Order ready for pickup',
+    body: 'Your order is ready to be collected.',
+  },
+  DELIVERED: {
+    type: 'order_delivered',
+    title: 'Order delivered',
+    body: 'Your order has been delivered. Enjoy!',
+  },
+  PICKED_UP: {
+    type: 'order_delivered',
+    title: 'Order picked up',
+    body: 'Your order has been picked up. Enjoy!',
+  },
   CANCELLED: {
     type: 'order_cancelled',
     title: 'Order cancelled',
@@ -97,40 +112,26 @@ const SHARED_ORDER_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusN
   },
 };
 
-const DELIVERY_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
-  OUT_FOR_DELIVERY: {
-    type: 'order_out_for_delivery',
-    title: 'Order out for delivery',
-    body: 'Your order is on its way.',
-  },
-  DELIVERED: {
-    type: 'order_delivered',
-    title: 'Order delivered',
-    body: 'Your order has been delivered. Enjoy!',
-  },
-};
-
-const PICKUP_STATUS_NOTIFICATION: Partial<Record<OrderStatus, OrderStatusNotificationConfig>> = {
-  OUT_FOR_DELIVERY: {
-    type: 'order_ready',
-    title: 'Order ready for pickup',
-    body: 'Your order is ready to be collected.',
-  },
-  DELIVERED: {
-    type: 'order_delivered',
-    title: 'Order picked up',
-    body: 'Your order has been picked up. Enjoy!',
-  },
-};
+/** Defense in depth: OrdersService.getAllowedTransitions already makes these
+ * combinations unreachable, but a notification must never describe a
+ * DELIVERY order as ready-for-pickup/picked-up or a PICKUP order as
+ * out-for-delivery/delivered even if a status were ever forced directly in
+ * the DB. */
+const DELIVERY_ONLY_STATUSES = new Set<OrderStatus>(['OUT_FOR_DELIVERY', 'DELIVERED']);
+const PICKUP_ONLY_STATUSES = new Set<OrderStatus>(['READY_FOR_PICKUP', 'PICKED_UP']);
 
 export function buildOrderStatusPayload(
   orderId: string,
   status: OrderStatus,
   deliveryMethod: DeliveryMethod,
 ): AppNotificationPayload | null {
-  const perMethodConfig =
-    deliveryMethod === 'PICKUP' ? PICKUP_STATUS_NOTIFICATION : DELIVERY_STATUS_NOTIFICATION;
-  const config = SHARED_ORDER_STATUS_NOTIFICATION[status] ?? perMethodConfig[status];
+  if (deliveryMethod === 'PICKUP' && DELIVERY_ONLY_STATUSES.has(status)) {
+    return null;
+  }
+  if (deliveryMethod === 'DELIVERY' && PICKUP_ONLY_STATUSES.has(status)) {
+    return null;
+  }
+  const config = ORDER_STATUS_NOTIFICATION[status];
   if (!config) {
     return null;
   }

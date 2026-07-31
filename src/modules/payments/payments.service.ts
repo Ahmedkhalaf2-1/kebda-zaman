@@ -188,7 +188,8 @@ export class PaymentsService {
 
   /**
    * COD settlement (plan §10.2: "marked PAID when delivered"). Called from
-   * OrdersService after a DELIVERED transition commits; a no-op for
+   * OrdersService after an order reaches a terminal-success status —
+   * DELIVERED (DELIVERY) or PICKED_UP (PICKUP), Fix 12A; a no-op for
    * CARD/WALLET or a payment that isn't PENDING.
    */
   async settleCashOnDelivery(orderId: string): Promise<void> {

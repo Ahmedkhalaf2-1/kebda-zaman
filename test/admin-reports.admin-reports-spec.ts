@@ -79,8 +79,10 @@ describe('Admin Reports (integration)', () => {
     return res.body;
   }
 
+  // Every caller below checks out with deliveryMethod: 'PICKUP', so completion
+  // runs through the pickup lifecycle (readyForPickup -> pickedUp).
   async function walkToDelivered(adminToken: string, orderId: string) {
-    for (const status of ['confirmed', 'preparing', 'outForDelivery', 'delivered']) {
+    for (const status of ['confirmed', 'preparing', 'readyForPickup', 'pickedUp']) {
       const res = await request(app.getHttpServer())
         .patch(`/api/v1/admin/orders/${orderId}/status`)
         .set('Authorization', `Bearer ${adminToken}`)
@@ -251,7 +253,7 @@ describe('Admin Reports (integration)', () => {
         .query({ from: '2001-01-01', to: '2001-01-31' })
         .set('Authorization', `Bearer ${admin.accessToken}`);
       expect(res.status).toBe(200);
-      expect(res.body.byStatus).toHaveLength(6);
+      expect(res.body.byStatus).toHaveLength(8);
       expect(res.body.byFulfillmentType).toHaveLength(2);
       expect(res.body.byPaymentMethod).toHaveLength(3);
       expect(res.body.byStatus.every((s: { count: number }) => s.count === 0)).toBe(true);
@@ -271,8 +273,8 @@ describe('Admin Reports (integration)', () => {
   });
 
   // ===========================================================================
-  describe('Delivered-only revenue + date filtering', () => {
-    it('counts revenue/averageOrderValue from DELIVERED orders only, scoped to the given window', async () => {
+  describe('Completed-order revenue + date filtering', () => {
+    it('counts revenue/averageOrderValue from both terminal-success statuses (DELIVERED + PICKED_UP), scoped to the given window', async () => {
       const admin = await registerWithRole('ADMIN');
       const customer = await registerCustomer();
       const from = new Date().toISOString();
@@ -285,18 +287,27 @@ describe('Admin Reports (integration)', () => {
         .set('Authorization', `Bearer ${admin.accessToken}`);
       const baselineOrders = baseline.body.totalOrders;
 
+      // PICKUP order walked all the way to PICKED_UP.
       await addToCart(customer.accessToken, itemA.id, 1);
-      const delivered = await checkout(customer.accessToken, {
+      const pickedUp = await checkout(customer.accessToken, {
         deliveryMethod: 'PICKUP',
         paymentMethod: 'CASH',
       });
-      await walkToDelivered(admin.accessToken, delivered.id);
+      await walkToDelivered(admin.accessToken, pickedUp.id);
 
+      // DELIVERY order walked all the way to DELIVERED.
       await addToCart(customer.accessToken, itemB.id, 1);
-      const pending = await checkout(customer.accessToken, {
+      const delivered = await checkout(customer.accessToken, {
         deliveryMethod: 'DELIVERY',
         paymentMethod: 'CARD',
       });
+      for (const status of ['confirmed', 'preparing', 'outForDelivery', 'delivered']) {
+        const step = await request(app.getHttpServer())
+          .patch(`/api/v1/admin/orders/${delivered.id}/status`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send({ status });
+        expect(step.status).toBe(200);
+      }
       const to = new Date(Date.now() + 1000).toISOString();
 
       const res = await request(app.getHttpServer())
@@ -306,14 +317,15 @@ describe('Admin Reports (integration)', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.totalOrders).toBe(2);
-      expect(res.body.deliveredOrders).toBe(1);
-      expect(res.body.totalRevenue).toBe(delivered.totalAmount);
-      expect(res.body.averageOrderValue).toBe(delivered.totalAmount);
+      // Both the PICKED_UP pickup order and the DELIVERED delivery order count
+      // as completed sales — neither terminal-success status is excluded.
+      expect(res.body.deliveredOrders).toBe(2);
+      expect(res.body.totalRevenue).toBe(pickedUp.totalAmount + delivered.totalAmount);
+      expect(res.body.averageOrderValue).toBe((pickedUp.totalAmount + delivered.totalAmount) / 2);
       expect(res.body.pickupOrders).toBe(1);
       expect(res.body.deliveryOrders).toBe(1);
       expect(res.body.cashOrders).toBe(1);
       expect(res.body.cardOrders).toBe(1);
-      expect(pending.id).toBeDefined();
 
       // A range that ends right before this test's first order was placed
       // must exclude both orders entirely — the baseline count is unchanged.

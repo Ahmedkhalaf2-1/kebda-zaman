@@ -11,14 +11,22 @@ describe('buildOrderStatusPayload', () => {
     });
   });
 
-  it('PICKUP + OUT_FOR_DELIVERY: presents as ready for pickup', () => {
-    const payload = buildOrderStatusPayload('order-1', 'OUT_FOR_DELIVERY', 'PICKUP');
+  it('PICKUP + READY_FOR_PICKUP: presents as ready for pickup', () => {
+    const payload = buildOrderStatusPayload('order-1', 'READY_FOR_PICKUP', 'PICKUP');
 
     expect(payload).toMatchObject({
       type: 'order_ready',
       title: 'Order ready for pickup',
       body: 'Your order is ready to be collected.',
     });
+  });
+
+  it('DELIVERY + READY_FOR_PICKUP: unreachable combination returns null', () => {
+    expect(buildOrderStatusPayload('order-1', 'READY_FOR_PICKUP', 'DELIVERY')).toBeNull();
+  });
+
+  it('PICKUP + OUT_FOR_DELIVERY: unreachable combination returns null', () => {
+    expect(buildOrderStatusPayload('order-1', 'OUT_FOR_DELIVERY', 'PICKUP')).toBeNull();
   });
 
   it('DELIVERY + DELIVERED: keeps delivery-specific wording', () => {
@@ -31,14 +39,22 @@ describe('buildOrderStatusPayload', () => {
     });
   });
 
-  it('PICKUP + DELIVERED: reuses order_delivered type but with picked-up wording', () => {
-    const payload = buildOrderStatusPayload('order-1', 'DELIVERED', 'PICKUP');
+  it('PICKUP + PICKED_UP: reuses order_delivered type but with picked-up wording', () => {
+    const payload = buildOrderStatusPayload('order-1', 'PICKED_UP', 'PICKUP');
 
     expect(payload).toMatchObject({
       type: 'order_delivered',
       title: 'Order picked up',
       body: 'Your order has been picked up. Enjoy!',
     });
+  });
+
+  it('DELIVERY + PICKED_UP: unreachable combination returns null', () => {
+    expect(buildOrderStatusPayload('order-1', 'PICKED_UP', 'DELIVERY')).toBeNull();
+  });
+
+  it('PICKUP + DELIVERED: unreachable combination returns null', () => {
+    expect(buildOrderStatusPayload('order-1', 'DELIVERED', 'PICKUP')).toBeNull();
   });
 
   describe('statuses shared between DELIVERY and PICKUP', () => {
@@ -78,9 +94,9 @@ describe('buildOrderStatusPayload', () => {
     });
   });
 
-  it('an unmapped status (no DB status maps to it today) still returns null for either delivery method', () => {
-    // READY has no DB OrderStatus value (plan §7.1 D2a Option A) — cast to
-    // exercise the fallback path without inventing a new enum value.
+  it('an unmapped status (not a real DB OrderStatus value) still returns null for either delivery method', () => {
+    // 'READY' (bare, no suffix) is not a real OrderStatus value — cast to
+    // exercise the fallback path without a genuine enum member.
     const unmapped = 'READY' as unknown as Parameters<typeof buildOrderStatusPayload>[1];
 
     expect(buildOrderStatusPayload('order-1', unmapped, 'DELIVERY')).toBeNull();
@@ -88,7 +104,7 @@ describe('buildOrderStatusPayload', () => {
   });
 
   it('preserves the payload contract (route/entityId/entityType/orderId) regardless of delivery method', () => {
-    const payload = buildOrderStatusPayload('order-42', 'OUT_FOR_DELIVERY', 'PICKUP');
+    const payload = buildOrderStatusPayload('order-42', 'READY_FOR_PICKUP', 'PICKUP');
 
     expect(payload).toMatchObject({
       route: '/orders/tracking/order-42',
