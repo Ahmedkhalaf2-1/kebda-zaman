@@ -31,6 +31,7 @@ import { StaffModule } from './modules/staff/staff.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { DeliveryZonesModule } from './modules/delivery-zones/delivery-zones.module';
+import { LocationsModule } from './modules/locations/locations.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -74,6 +75,12 @@ import { RolesGuard } from './common/guards/roles.guard';
                 'req.headers.cookie',
                 'req.body.password',
                 'req.body.refreshToken',
+                // FCM device tokens (POST /devices/register, PUT /devices/token) —
+                // never printed even truncated if request-body logging is ever
+                // enabled (defense in depth alongside the default pino-http
+                // serializer, which does not log req.body today).
+                'req.body.token',
+                'req.body.oldToken',
               ],
               remove: true,
             },
@@ -130,6 +137,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     CustomersModule,
     ReportsModule,
     DeliveryZonesModule,
+    LocationsModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.

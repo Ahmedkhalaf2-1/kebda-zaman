@@ -34,6 +34,8 @@ export const validationSchema = Joi.object({
   // Public origin used to build the imageUrl returned by the upload endpoint.
   PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
   UPLOAD_MAX_FILE_SIZE_MB: Joi.number().integer().min(1).max(20).default(5),
+  // Optional: reverse geocoding is disabled (controlled 502 on request) when unset.
+  GOOGLE_GEOCODING_API_KEY: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)

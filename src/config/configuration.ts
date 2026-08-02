@@ -38,6 +38,11 @@ export interface AppConfig {
     publicBaseUrl: string;
     maxFileSizeMb: number;
   };
+  googleGeocoding: {
+    // Server-side only — never exposed to Flutter. Unset disables the
+    // reverse-geocode endpoint (it fails with a controlled 502).
+    apiKey?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -71,5 +76,8 @@ export default (): AppConfig => ({
     dir: resolve(process.cwd(), process.env.UPLOAD_DIR ?? './uploads'),
     publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
     maxFileSizeMb: parseInt(process.env.UPLOAD_MAX_FILE_SIZE_MB ?? '5', 10),
+  },
+  googleGeocoding: {
+    apiKey: process.env.GOOGLE_GEOCODING_API_KEY || undefined,
   },
 });
