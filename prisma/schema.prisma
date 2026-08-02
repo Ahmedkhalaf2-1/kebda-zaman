@@ -90,6 +90,11 @@ enum CampaignStatus {
   FAILED
 }
 
+enum MenuItemBadge {
+  BESTSELLER
+  TOP_RATED
+}
+
 // ---------------------------------------------------------------------------
 // Identity & sessions (plan §2.1, §2.2)
 // ---------------------------------------------------------------------------
@@ -171,30 +176,58 @@ model Category {
 
 /// Plan §2.5. Referenced by OrderItem only via a soft (non-FK) snapshot reference.
 model MenuItem {
-  id            String    @id @default(uuid()) @db.Uuid
-  categoryId    String    @db.Uuid
-  nameAr        String
-  nameEn        String
-  descriptionAr String    @db.Text
-  descriptionEn String    @db.Text
-  basePrice     Decimal   @db.Decimal(10, 2)
-  imageUrl      String?
-  isAvailable   Boolean   @default(true)
-  isPopular     Boolean   @default(false)
-  displayOrder  Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  deletedAt     DateTime?
+  id             String         @id @default(uuid()) @db.Uuid
+  categoryId     String         @db.Uuid
+  nameAr         String
+  nameEn         String
+  descriptionAr  String         @db.Text
+  descriptionEn  String         @db.Text
+  basePrice      Decimal        @db.Decimal(10, 2)
+  // Optional kcal value shown on the menu. No calculation/derivation — admin-entered only.
+  calories       Int?
+  // Previous/original display price for a discounted item; basePrice remains the
+  // actual charged price. No promotions engine or discount math reads this in this phase.
+  compareAtPrice Decimal?       @db.Decimal(10, 2)
+  imageUrl       String?
+  isAvailable    Boolean        @default(true)
+  isPopular      Boolean        @default(false)
+  // Manually set by the Admin; independent from isPopular. Null = no badge. Never inferred.
+  badge          MenuItemBadge?
+  displayOrder   Int?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deletedAt      DateTime?
 
-  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  variants    ItemVariant[]
-  addonGroups AddonGroup[]
-  cartItems   CartItem[]
-  favorites   Favorite[]
+  category           Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants           ItemVariant[]
+  addonGroups        AddonGroup[]
+  cartItems          CartItem[]
+  favorites          Favorite[]
+  recommendations    MenuItemRecommendation[] @relation("MenuItemRecommendations")
+  recommendedInLists MenuItemRecommendation[] @relation("RecommendedMenuItem")
 
   @@index([categoryId])
   @@index([isAvailable])
   @@index([isPopular])
+}
+
+/// "Often Ordered With" — admin-curated recommendation from one MenuItem to
+/// another. Recommendations point to MenuItem only (no variant targeting), and
+/// carry no pricing/business logic in this phase — displayOrder just preserves
+/// the admin-curated ordering.
+model MenuItemRecommendation {
+  id                    String   @id @default(uuid()) @db.Uuid
+  menuItemId            String   @db.Uuid
+  recommendedMenuItemId String   @db.Uuid
+  displayOrder          Int      @default(0)
+  createdAt             DateTime @default(now())
+
+  menuItem            MenuItem @relation("MenuItemRecommendations", fields: [menuItemId], references: [id], onDelete: Cascade)
+  recommendedMenuItem MenuItem @relation("RecommendedMenuItem", fields: [recommendedMenuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, recommendedMenuItemId])
+  @@index([menuItemId, displayOrder])
+  @@index([recommendedMenuItemId])
 }
 
 /// Size/variant with a price delta. Plan §2.6.
