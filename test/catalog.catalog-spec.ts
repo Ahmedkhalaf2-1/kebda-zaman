@@ -6,6 +6,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
+import { id } from '../prisma/seed';
 
 /**
  * Phase 3 integration tests: public catalog endpoints against the live
@@ -431,6 +432,19 @@ describe('Catalog (integration)', () => {
       const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
       expect(res.status).toBe(200);
       expect(res.body.oftenOrderedWith).toEqual([]);
+    });
+
+    it('returns the seeded VO3 recommendations for a real menu item, in the approved order', async () => {
+      // "orange-mirinda" -> ["seven-up", "bread", "green-salad"], from the
+      // approved recommendation dataset (prisma/data/vo3-menu.data.ts).
+      const orangeMirindaId = id('menu-item:orange-mirinda');
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${orangeMirindaId}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith.map((i: { id: string }) => i.id)).toEqual([
+        id('menu-item:seven-up'),
+        id('menu-item:bread'),
+        id('menu-item:green-salad'),
+      ]);
     });
   });
 

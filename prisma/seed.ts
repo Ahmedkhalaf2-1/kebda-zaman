@@ -355,7 +355,104 @@ export async function retireLegacyFakeCatalog(
   }
 }
 
+const MAX_RECOMMENDATIONS_PER_ITEM = 3;
+
+/**
+ * Validates the static "Often Ordered With" dataset (recommendationKeys on
+ * each VO3_MENU item) before any database write. Pure/no DB access — fails
+ * fast with a descriptive error on the first violation found, per source
+ * item, in dataset order.
+ */
+export function validateVo3Recommendations(): void {
+  const allItems = VO3_MENU.flatMap((category) => category.items);
+  const validKeys = new Set(allItems.map((item) => item.key));
+
+  for (const item of allItems) {
+    const targets = item.recommendationKeys ?? [];
+
+    if (targets.length > MAX_RECOMMENDATIONS_PER_ITEM) {
+      throw new Error(
+        `VO3 recommendations: "${item.key}" has ${targets.length} targets, max ${MAX_RECOMMENDATIONS_PER_ITEM}`,
+      );
+    }
+    if (new Set(targets).size !== targets.length) {
+      throw new Error(`VO3 recommendations: "${item.key}" has a duplicate target key`);
+    }
+    if (targets.includes(item.key)) {
+      throw new Error(`VO3 recommendations: "${item.key}" recommends itself`);
+    }
+    for (const targetKey of targets) {
+      if (!validKeys.has(targetKey)) {
+        throw new Error(
+          `VO3 recommendations: "${item.key}" targets unknown/unapproved menu item key "${targetKey}"`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Fully synchronizes one VO3 source item's outgoing recommendation rows to
+ * exactly `targetIds`, in that order — deletes rows for removed targets,
+ * updates displayOrder for retained targets, creates rows for new targets.
+ * Deletions happen before creates, so a retained/reordered target's row is
+ * never touched by the unique (menuItemId, recommendedMenuItemId)
+ * constraint. Scoped strictly to `menuItemId`'s own outgoing rows — never
+ * touches incoming recommendations or any other item's rows.
+ */
+async function syncMenuItemRecommendations(
+  menuItemId: string,
+  targetIds: readonly string[],
+): Promise<void> {
+  const existing = await prisma.menuItemRecommendation.findMany({
+    where: { menuItemId },
+    select: { id: true, recommendedMenuItemId: true },
+  });
+  const existingByTarget = new Map(existing.map((r) => [r.recommendedMenuItemId, r.id]));
+  const submittedTargets = new Set(targetIds);
+
+  const idsToDelete = existing
+    .filter((r) => !submittedTargets.has(r.recommendedMenuItemId))
+    .map((r) => r.id);
+  if (idsToDelete.length > 0) {
+    await prisma.menuItemRecommendation.deleteMany({ where: { id: { in: idsToDelete } } });
+  }
+
+  for (const [index, recommendedMenuItemId] of targetIds.entries()) {
+    const existingId = existingByTarget.get(recommendedMenuItemId);
+    if (existingId) {
+      await prisma.menuItemRecommendation.update({
+        where: { id: existingId },
+        data: { displayOrder: index },
+      });
+    } else {
+      await prisma.menuItemRecommendation.create({
+        data: { menuItemId, recommendedMenuItemId, displayOrder: index },
+      });
+    }
+  }
+}
+
+/**
+ * Seeds the approved "Often Ordered With" recommendations for every VO3 menu
+ * item. Scoped strictly to the 65 approved VO3 item ids (both as source and
+ * as resolved targets) — never touches recommendations belonging to any
+ * non-VO3/manually created menu item. An item with no recommendationKeys (or
+ * an explicit empty list) ends up with zero outgoing rows.
+ */
+export async function seedMenuItemRecommendations(): Promise<void> {
+  for (const category of VO3_MENU) {
+    for (const item of category.items) {
+      const menuItemId = id(`menu-item:${item.key}`);
+      const targetIds = (item.recommendationKeys ?? []).map((key) => id(`menu-item:${key}`));
+      await syncMenuItemRecommendations(menuItemId, targetIds);
+    }
+  }
+}
+
 async function main(): Promise<void> {
+  validateVo3Recommendations();
+
   await seedRestaurantSettings();
   await seedAdmin();
   await seedRealAdmin();
@@ -363,10 +460,16 @@ async function main(): Promise<void> {
   const categoryIds = await seedVo3Categories();
   const menuItemIds = await seedVo3MenuItems(categoryIds);
   await retireLegacyFakeCatalog(new Set(categoryIds.values()), menuItemIds);
+  await seedMenuItemRecommendations();
 
   const itemCount = VO3_MENU.reduce((sum, category) => sum + category.items.length, 0);
+  const recommendationCount = VO3_MENU.reduce(
+    (sum, category) =>
+      sum + category.items.reduce((s, item) => s + (item.recommendationKeys?.length ?? 0), 0),
+    0,
+  );
   console.log(
-    `Seed complete: ${VO3_MENU.length} categories, ${itemCount} menu items, 1 restaurant settings row, 2 admin users.`,
+    `Seed complete: ${VO3_MENU.length} categories, ${itemCount} menu items, ${recommendationCount} recommendations, 1 restaurant settings row, 2 admin users.`,
   );
 }
 

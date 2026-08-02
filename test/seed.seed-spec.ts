@@ -2,9 +2,11 @@ import { Prisma, PrismaClient, RestaurantSettings } from '@prisma/client';
 import {
   id,
   retireLegacyFakeCatalog,
+  seedMenuItemRecommendations,
   seedRestaurantSettings,
   seedVo3Categories,
   seedVo3MenuItems,
+  validateVo3Recommendations,
 } from '../prisma/seed';
 import { VO3_MENU } from '../prisma/data/vo3-menu.data';
 
@@ -288,5 +290,191 @@ describe('VO3 menu seeding (integration)', () => {
     const fakeItemRowAfter = await prisma.menuItem.findUnique({ where: { id: fakeItemId } });
     expect(fakeCategoryRowAfter?.deletedAt).toEqual(fakeCategoryRow?.deletedAt);
     expect(fakeItemRowAfter?.deletedAt).toEqual(fakeItemRow?.deletedAt);
+  });
+});
+
+/**
+ * Pure data-shape validation for the approved "Often Ordered With" dataset
+ * (recommendationKeys on prisma/data/vo3-menu.data.ts items). No database
+ * access — these only fail on a data-entry mistake in the dataset itself.
+ */
+describe('VO3 recommendations (static validation)', () => {
+  const allItems = VO3_MENU.flatMap((category) => category.items);
+  const validKeys = new Set(allItems.map((item) => item.key));
+  // Every variant key actually used anywhere in the dataset — a
+  // recommendation must never target one of these instead of a MenuItem key.
+  const variantKeys = new Set(
+    allItems.flatMap((item) => (item.variants ?? []).map((variant) => variant.key)),
+  );
+
+  it('does not throw: every source/target key resolves to an approved VO3 menu item key', () => {
+    expect(() => validateVo3Recommendations()).not.toThrow();
+  });
+
+  it('no source recommends itself', () => {
+    for (const item of allItems) {
+      expect(item.recommendationKeys ?? []).not.toContain(item.key);
+    }
+  });
+
+  it('no source has duplicate target keys', () => {
+    for (const item of allItems) {
+      const targets = item.recommendationKeys ?? [];
+      expect(new Set(targets).size).toBe(targets.length);
+    }
+  });
+
+  it('no source has more than 3 recommendation targets', () => {
+    for (const item of allItems) {
+      expect((item.recommendationKeys ?? []).length).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('never references a variant key (only approved MenuItem keys)', () => {
+    for (const item of allItems) {
+      for (const targetKey of item.recommendationKeys ?? []) {
+        expect(variantKeys.has(targetKey)).toBe(false);
+        expect(validKeys.has(targetKey)).toBe(true);
+      }
+    }
+  });
+
+  it('never references Custard, Rice Pudding, or Om Ali (not in the approved core dataset)', () => {
+    const unapproved = ['custard', 'rice-pudding', 'om-ali'];
+    for (const item of allItems) {
+      for (const targetKey of item.recommendationKeys ?? []) {
+        expect(unapproved).not.toContain(targetKey);
+      }
+    }
+    for (const banned of unapproved) {
+      expect(validKeys.has(banned)).toBe(false);
+    }
+  });
+
+  it('the static dataset totals exactly 170 recommendation rows', () => {
+    const total = allItems.reduce((sum, item) => sum + (item.recommendationKeys?.length ?? 0), 0);
+    expect(total).toBe(170);
+  });
+});
+
+/**
+ * Integration coverage for the properties a pure data check can't see: DB
+ * synchronization, idempotency, and scoping. Runs against the real dev
+ * PostgreSQL instance, same as the suites above — these rows ARE the
+ * intended permanent recommendation data, so nothing here is cleaned up.
+ */
+describe('VO3 recommendations seeding (integration)', () => {
+  const prisma = new PrismaClient();
+  const vo3ItemIds = new Set(
+    VO3_MENU.flatMap((category) => category.items.map((item) => id(`menu-item:${item.key}`))),
+  );
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  it('seeds every approved recommendation, scoped to VO3 items, with displayOrder preserving dataset order, and zero rows for items with none', async () => {
+    await seedMenuItemRecommendations();
+
+    const allRows = await prisma.menuItemRecommendation.findMany();
+    const vo3Rows = allRows.filter((row) => vo3ItemIds.has(row.menuItemId));
+
+    // 5. All stored rows point to approved VO3 MenuItems (source and target).
+    expect(vo3Rows.every((row) => vo3ItemIds.has(row.recommendedMenuItemId))).toBe(true);
+    // 15. Total recommendation row count matches the static dataset exactly.
+    expect(vo3Rows.length).toBe(170);
+
+    // 6. displayOrder exactly matches dataset order, for a sample source item.
+    const orangeMirinda = await prisma.menuItemRecommendation.findMany({
+      where: { menuItemId: id('menu-item:orange-mirinda') },
+      orderBy: { displayOrder: 'asc' },
+    });
+    expect(orangeMirinda.map((row) => row.recommendedMenuItemId)).toEqual([
+      id('menu-item:seven-up'),
+      id('menu-item:bread'),
+      id('menu-item:green-salad'),
+    ]);
+    expect(orangeMirinda.map((row) => row.displayOrder)).toEqual([0, 1, 2]);
+
+    // 12. Items with no approved recommendations have zero outgoing rows.
+    for (const key of ['water', 'kinza', 'bread', 'tahinah']) {
+      const count = await prisma.menuItemRecommendation.count({
+        where: { menuItemId: id(`menu-item:${key}`) },
+      });
+      expect(count).toBe(0);
+    }
+  });
+
+  it('is idempotent across two runs, removes a stale recommendation for an approved source, and never touches a non-VO3 source', async () => {
+    await seedMenuItemRecommendations();
+    const beforeCount = await prisma.menuItemRecommendation.count();
+
+    // Non-VO3 (manually created) source: untouched by the VO3 seeder.
+    const manualCategory = await prisma.category.create({
+      data: { nameAr: 'فئة يدوية', nameEn: 'Manual Category' },
+    });
+    const manualSource = await prisma.menuItem.create({
+      data: {
+        categoryId: manualCategory.id,
+        nameAr: 'صنف يدوي',
+        nameEn: 'Manual Source Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: new Prisma.Decimal('10.00'),
+      },
+    });
+    const manualTarget = await prisma.menuItem.create({
+      data: {
+        categoryId: manualCategory.id,
+        nameAr: 'صنف يدوي مستهدف',
+        nameEn: 'Manual Target Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: new Prisma.Decimal('10.00'),
+      },
+    });
+    const manualRecommendation = await prisma.menuItemRecommendation.create({
+      data: {
+        menuItemId: manualSource.id,
+        recommendedMenuItemId: manualTarget.id,
+        displayOrder: 0,
+      },
+    });
+
+    // Stale recommendation for an approved VO3 source: a target not in the
+    // approved set for "water" (which has none approved).
+    const waterId = id('menu-item:water');
+    const staleTarget = id('menu-item:pepsi');
+    await prisma.menuItemRecommendation.create({
+      data: { menuItemId: waterId, recommendedMenuItemId: staleTarget, displayOrder: 0 },
+    });
+
+    // Second run.
+    await seedMenuItemRecommendations();
+
+    const afterCount = await prisma.menuItemRecommendation.count();
+    expect(afterCount).toBe(beforeCount + 1); // +1 = the still-present manual recommendation
+
+    // 9. Idempotent: VO3-sourced row count unchanged (no duplicates created).
+    const vo3RowsAfter = await prisma.menuItemRecommendation.findMany();
+    expect(vo3RowsAfter.filter((row) => vo3ItemIds.has(row.menuItemId))).toHaveLength(170);
+
+    // 10. The stale "water -> pepsi" row was removed by resyncing "water" to [].
+    const waterRows = await prisma.menuItemRecommendation.findMany({
+      where: { menuItemId: waterId },
+    });
+    expect(waterRows).toHaveLength(0);
+
+    // 11. The manual (non-VO3) source's recommendation is untouched.
+    const manualRow = await prisma.menuItemRecommendation.findUnique({
+      where: { id: manualRecommendation.id },
+    });
+    expect(manualRow).not.toBeNull();
+
+    await prisma.menuItemRecommendation.deleteMany({
+      where: { menuItemId: { in: [manualSource.id] } },
+    });
+    await prisma.menuItem.deleteMany({ where: { id: { in: [manualSource.id, manualTarget.id] } } });
+    await prisma.category.delete({ where: { id: manualCategory.id } });
   });
 });

@@ -30,6 +30,15 @@ export interface Vo3MenuItemSeed {
   /** Omitted -> null (no badge). Manually assigned only; never inferred. */
   badge?: MenuItemBadge;
   variants?: Vo3VariantSeed[];
+  /**
+   * Approved "Often Ordered With" targets, as MenuItem keys (never variant
+   * keys — a source referencing a specific variant, e.g. "Meat Hawawshi -
+   * Large", resolves to its parent MenuItem key). Omitted -> no outgoing
+   * recommendations. Max 3, in the approved display order, no self-reference,
+   * no duplicate targets — enforced by validateVo3Recommendations() before
+   * any database write.
+   */
+  recommendationKeys?: readonly string[];
 }
 
 export interface Vo3CategorySeed {
@@ -52,6 +61,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionAr: 'مشروب غازي منعش بنكهة البرتقال.',
         descriptionEn: 'Refreshing orange-flavoured soft drink.',
         basePrice: 4,
+        recommendationKeys: ['seven-up', 'bread', 'green-salad'],
       },
       {
         key: 'pepsi',
@@ -61,6 +71,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Refreshing carbonated soft drink.',
         basePrice: 4,
         calories: 172,
+        recommendationKeys: ['green-salad', 'water', 'tahinah'],
       },
       {
         key: 'seven-up',
@@ -70,6 +81,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'A crisp and refreshing lemon-lime soft drink.',
         basePrice: 4,
         calories: 89,
+        recommendationKeys: ['pepsi', 'kinza', 'water'],
       },
       {
         key: 'water',
@@ -133,6 +145,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Fresh mixed green salad.',
         basePrice: 3,
         calories: 85,
+        // Source showed both Kinza Citrus and Kinza Lemon; both resolve to
+        // the same parent "kinza" MenuItem — stored once, not duplicated.
+        recommendationKeys: ['kinza', 'tahinah'],
       },
       {
         key: 'bread',
@@ -167,6 +182,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Meat kofta prepared with special spices and tahini in the oven.',
         basePrice: 20,
         calories: 340,
+        recommendationKeys: ['mix-mokh-and-pane-liver-sandwich', 'tuhal-sandwich', 'kinza'],
       },
       {
         key: 'hawawshi-kids-meal',
@@ -176,6 +192,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated minced meat stuffed in bread.',
         basePrice: 20,
         calories: 370,
+        recommendationKeys: ['meat-hawawshi', 'sausage-hawawshi', 'kinza'],
       },
     ],
   },
@@ -197,6 +214,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
           { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 7, isDefault: false },
         ],
+        recommendationKeys: ['tuhal-sandwich', 'bread', 'seven-up'],
       },
       {
         key: 'sausage-hawawshi',
@@ -210,6 +228,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
           { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 7, isDefault: false },
         ],
+        recommendationKeys: ['kinza', 'pepsi', 'tuhal-sandwich'],
       },
       {
         key: 'kofta-hawawshi',
@@ -223,6 +242,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
           { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 8, isDefault: false },
         ],
+        recommendationKeys: ['mix-mokh-and-pane-liver-sandwich', 'meat-hawawshi', 'tuhal-sandwich'],
       },
       {
         key: 'meat-hawawshi-with-cheese',
@@ -237,6 +257,10 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
           { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 7, isDefault: false },
         ],
+        // Source's third recommendation appeared to be a dessert item but
+        // wasn't reliably identified in the approved core dataset — omitted,
+        // not guessed.
+        recommendationKeys: ['kinza', 'meat-hawawshi'],
       },
       {
         key: 'sausage-hawawshi-with-cheese',
@@ -250,6 +274,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
           { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 7, isDefault: false },
         ],
+        recommendationKeys: ['tuhal-sandwich', 'tahinah', 'pane-liver-sandwich'],
       },
     ],
   },
@@ -266,6 +291,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Six pieces of lamb chops served with bread and salads.',
         basePrice: 60,
         calories: 280,
+        recommendationKeys: ['fishah-plate', 'pasta-with-ground-beef', 'green-salad'],
       },
       {
         key: 'mix-tiger',
@@ -275,6 +301,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Grilled liver with kebab, kofta, shish, and tarb.',
         basePrice: 65,
         calories: 900,
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['mix-pane-and-askindirani-liver-plate', 'water'],
       },
       {
         key: 'mix-zaman',
@@ -284,6 +313,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Kebab with kofta, shish, and tarb.',
         basePrice: 52,
         calories: 715,
+        recommendationKeys: ['hawawshi-kids-meal', 'rice', 'meat-hawawshi-with-cheese'],
       },
       {
         key: 'mix-mukhsos',
@@ -293,6 +323,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Grilled liver with shish, kebab, and kofta.',
         basePrice: 50,
         calories: 630,
+        recommendationKeys: ['pane-liver-sandwich', 'rice', 'meat-hawawshi'],
       },
       {
         key: 'tarb-plate',
@@ -303,6 +334,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           'Minced meat wrapped in a light layer of fat and seasoned with salt and spices.',
         basePrice: 52,
         calories: 951,
+        recommendationKeys: ['mix-chef-plate', 'kofta-plate', 'tahinah'],
       },
       {
         key: 'awsal-kebab-plate',
@@ -312,6 +344,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated and grilled meat pieces with fresh vegetables.',
         basePrice: 45,
         calories: 1080,
+        recommendationKeys: ['pane-liver-sandwich', 'meat-hawawshi', 'plain-pasta'],
       },
       {
         key: 'grilled-liver-plate',
@@ -321,6 +354,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Grilled liver cooked with fresh vegetables.',
         basePrice: 42,
         calories: 360,
+        // Source's third recommendation was Custard, not in the approved
+        // core dataset — omitted, not created.
+        recommendationKeys: ['fishah-sandwich', 'kofta-hawawshi'],
       },
       {
         key: 'shish-tawouk-plate',
@@ -330,6 +366,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated and grilled chicken pieces prepared in our own way.',
         basePrice: 42,
         calories: 381,
+        recommendationKeys: ['askindirani-liver-plate', 'kofta-kids-meal', 'kinza'],
       },
       {
         key: 'kofta-plate',
@@ -339,6 +376,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Minced meat seasoned with spices, onions, and salt.',
         basePrice: 45,
         calories: 822,
+        recommendationKeys: ['fishah-and-tuhal-plate', 'mix-zaman', 'mix-mukhsos'],
       },
       {
         key: 'tarb-sandwich',
@@ -349,6 +387,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 20,
         calories: 317,
         badge: 'TOP_RATED',
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['sausage-hawawshi', 'mix-mokh-and-pane-liver-sandwich'],
       },
     ],
   },
@@ -365,6 +406,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated and grilled meat pieces with fresh vegetables in bread.',
         basePrice: 17,
         calories: 360,
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['askindirani-liver-sandwich', 'bread'],
       },
       {
         key: 'grilled-liver-sandwich',
@@ -374,6 +418,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Egyptian-style grilled marinated liver served in fresh bread.',
         basePrice: 16,
         calories: 121,
+        recommendationKeys: [
+          'awsal-kebab-sandwich',
+          'fishah-sandwich',
+          'mix-pane-and-askindirani-liver-sandwich',
+        ],
       },
       {
         key: 'shish-tawouk-sandwich',
@@ -383,6 +432,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Grilled chicken pieces served in fresh bread.',
         basePrice: 16,
         calories: 127,
+        recommendationKeys: ['rice', 'seven-up', 'grilled-liver-sandwich'],
       },
       {
         key: 'kofta-sandwich',
@@ -393,6 +443,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 17,
         calories: 274,
         badge: 'TOP_RATED',
+        recommendationKeys: [
+          'kofta-kids-meal',
+          'mix-mokh-and-pane-liver-sandwich',
+          'tarb-sandwich',
+        ],
       },
       {
         key: 'mix-jumbo-plate',
@@ -402,6 +457,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Mokh with pane liver, Alexandrian liver, fishah, and tuhal.',
         basePrice: 70,
         calories: 880,
+        recommendationKeys: ['kofta-kids-meal', 'kinza', 'hawawshi-kids-meal'],
       },
       {
         key: 'mix-combo-plate',
@@ -411,6 +467,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Mokh with pane liver and two grilled skewers.',
         basePrice: 65,
         calories: 770,
+        recommendationKeys: ['green-salad', 'fishah-and-tuhal-plate', 'meat-hawawshi'],
       },
       {
         key: 'mix-plate-with-mokh',
@@ -420,6 +477,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'A mixed plate of mokh and pane liver.',
         basePrice: 60,
         calories: 478,
+        recommendationKeys: ['fishah-and-tuhal-sandwich', 'sausage-hawawshi', 'mix-zaman'],
       },
       {
         key: 'mix-mokh-and-pane-liver-plate',
@@ -429,6 +487,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'A mix of mokh and pane liver.',
         basePrice: 60,
         calories: 400,
+        recommendationKeys: [
+          'kinza',
+          'mix-pane-and-askindirani-liver-sandwich',
+          'mix-fishah-tuhal-askindirani-plate',
+        ],
       },
       {
         key: 'mokh-plate',
@@ -438,6 +501,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Mokh prepared in a special way with delicious spices.',
         basePrice: 60,
         calories: 105,
+        // Source's third recommendation was Custard, not in the approved
+        // core dataset — omitted, not created.
+        recommendationKeys: ['mix-mukhsos', 'askindirani-liver-plate'],
       },
       {
         key: 'sheep-head-meat-plate',
@@ -447,6 +513,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Seasoned and cooked sheep-head meat.',
         basePrice: 50,
         calories: 864,
+        recommendationKeys: [
+          'mix-pane-and-askindirani-liver-sandwich',
+          'mix-plate-without-mokh',
+          'tuhal-plate',
+        ],
       },
       {
         key: 'mix-chef-plate',
@@ -456,6 +527,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Pane liver with Alexandrian liver and two grilled skewers.',
         basePrice: 50,
         calories: 630,
+        recommendationKeys: ['mix-fishah-tuhal-askindirani-plate', 'shish-tawouk-plate', 'kinza'],
       },
       {
         key: 'mix-plate-without-mokh',
@@ -465,6 +537,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Sausage, Alexandrian liver, and pane liver.',
         basePrice: 42,
         calories: 225,
+        recommendationKeys: ['askindirani-liver-plate', 'rice', 'kofta-sandwich'],
       },
       {
         key: 'sausage-plate',
@@ -474,6 +547,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Cooked and seasoned sausage.',
         basePrice: 40,
         calories: 830,
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['sausage-hawawshi', 'mix-mokh-and-pane-liver-sandwich'],
       },
       {
         key: 'tuhal-plate',
@@ -483,6 +559,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated and grilled tuhal.',
         basePrice: 38,
         calories: 395,
+        recommendationKeys: ['water', 'bread', 'awsal-kebab-sandwich'],
       },
       {
         key: 'mix-pane-and-askindirani-liver-plate',
@@ -492,6 +569,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Pane liver with Alexandrian liver.',
         basePrice: 32,
         calories: 400,
+        recommendationKeys: ['sausage-hawawshi-with-cheese', 'fishah-plate', 'meat-hawawshi'],
       },
       {
         key: 'pane-liver-plate',
@@ -501,6 +579,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Seasoned crispy pane liver.',
         basePrice: 36,
         calories: 410,
+        recommendationKeys: [
+          'mix-mokh-and-pane-liver-sandwich',
+          'pepsi',
+          'sausage-hawawshi-with-cheese',
+        ],
       },
       {
         key: 'mix-fishah-tuhal-askindirani-plate',
@@ -510,6 +593,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'A mixed plate of fishah, tuhal, and Alexandrian liver.',
         basePrice: 32,
         calories: 400,
+        // Source's third recommendation was Custard, not in the approved
+        // core dataset — omitted, not created.
+        recommendationKeys: ['water', 'tahinah'],
       },
       {
         key: 'fishah-and-tuhal-plate',
@@ -519,6 +605,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Fishah and tuhal cooked in the traditional way.',
         basePrice: 30,
         calories: 250,
+        recommendationKeys: [
+          'mix-pane-and-askindirani-liver-plate',
+          'meat-hawawshi',
+          'hawawshi-kids-meal',
+        ],
       },
       {
         key: 'fishah-plate',
@@ -528,6 +619,11 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Marinated beef fishah cooked in our own way.',
         basePrice: 28,
         calories: 238,
+        recommendationKeys: [
+          'kofta-hawawshi',
+          'mix-pane-and-askindirani-liver-plate',
+          'sausage-hawawshi',
+        ],
       },
       {
         key: 'askindirani-liver-plate',
@@ -537,6 +633,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Egyptian-style Alexandrian liver.',
         basePrice: 30,
         calories: 410,
+        recommendationKeys: ['sausage-pasta', 'pane-liver-sandwich', 'kofta-hawawshi'],
       },
       {
         key: 'mix-mokh-and-pane-liver-sandwich',
@@ -546,6 +643,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Mokh with pane liver served in fresh bread.',
         basePrice: 20,
         calories: 160,
+        recommendationKeys: ['pane-liver-sandwich', 'sausage-sandwich', 'sausage-hawawshi'],
       },
       {
         key: 'mokh-sandwich',
@@ -556,6 +654,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 20,
         calories: 412,
         badge: 'BESTSELLER',
+        // Source's third recommendation was Custard, not in the approved
+        // core dataset — omitted, not created.
+        recommendationKeys: ['fishah-sandwich', 'plain-pasta'],
       },
       {
         key: 'sausage-sandwich',
@@ -565,6 +666,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Seasoned sausage sandwich with a delicious sauce.',
         basePrice: 17,
         calories: 332,
+        recommendationKeys: ['meat-hawawshi', 'kofta-hawawshi', 'water'],
       },
       {
         key: 'mix-pane-and-askindirani-liver-sandwich',
@@ -575,6 +677,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           'Pane and Alexandrian liver cooked with fresh vegetables and served in bread.',
         basePrice: 16,
         calories: 160,
+        // Source's third recommendation was Custard, not in the approved
+        // core dataset — omitted, not created.
+        recommendationKeys: ['water', 'sausage-hawawshi-with-cheese'],
       },
       {
         key: 'tuhal-sandwich',
@@ -584,6 +689,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Seasoned tuhal served in fresh bread.',
         basePrice: 14,
         calories: 158,
+        recommendationKeys: ['sausage-hawawshi-with-cheese', 'pepsi', 'tahinah'],
       },
       {
         key: 'fishah-and-tuhal-sandwich',
@@ -593,6 +699,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Fishah and tuhal cooked with fresh vegetables and served in bread.',
         basePrice: 13,
         calories: 100,
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['water', 'kinza'],
       },
       {
         key: 'askindirani-liver-sandwich',
@@ -603,6 +712,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 12,
         calories: 164,
         badge: 'TOP_RATED',
+        recommendationKeys: ['tahinah', 'kinza', 'green-salad'],
       },
       {
         key: 'fishah-sandwich',
@@ -612,6 +722,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Cooked fishah with fresh vegetables served in bread.',
         basePrice: 12,
         calories: 95,
+        recommendationKeys: ['orange-mirinda', 'water', 'tuhal-sandwich'],
       },
       {
         key: 'pane-liver-sandwich',
@@ -622,6 +733,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 13,
         calories: 165,
         badge: 'BESTSELLER',
+        recommendationKeys: ['meat-hawawshi-with-cheese', 'water', 'meat-hawawshi'],
       },
     ],
   },
@@ -638,6 +750,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'A family box containing six assorted sandwiches at a reasonable price.',
         basePrice: 75,
         calories: 450,
+        recommendationKeys: ['mokh-plate', 'liver-pasta', 'mix-plate-without-mokh'],
       },
       {
         key: 'double-box',
@@ -649,6 +762,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           'A box for two with four sandwiches, Alexandrian liver, sausage, salads, two Kinza cans, and two waters.',
         basePrice: 50,
         calories: 230,
+        recommendationKeys: ['sausage-hawawshi-with-cheese', 'water', 'seven-up'],
       },
       {
         key: 'akil-box',
@@ -660,6 +774,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           'A family box with sausage, Alexandrian liver, kofta, and shish tawouk sandwiches, served with salads, potatoes, water, and soft drinks.',
         basePrice: 105,
         calories: 750,
+        recommendationKeys: ['sausage-hawawshi-with-cheese', 'sausage-hawawshi', 'mix-zaman'],
       },
       {
         key: 'hawawshi-box',
@@ -670,6 +785,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
           'A box containing seven large hawawshi loaves prepared with fresh ingredients.',
         basePrice: 125,
         calories: 450,
+        recommendationKeys: ['mix-plate-without-mokh', 'kilo-kofta', 'shish-tawouk-sandwich'],
       },
     ],
   },
@@ -686,6 +802,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Delicious pasta cooked with sausage pieces.',
         basePrice: 25,
         calories: 600,
+        recommendationKeys: ['pane-liver-sandwich', 'green-salad', 'kinza'],
       },
       {
         key: 'liver-pasta',
@@ -695,6 +812,9 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Pasta in red sauce with liver prepared with delicious spices.',
         basePrice: 25,
         calories: 580,
+        // Source's third recommendation was Rice Pudding, not in the
+        // approved core dataset — omitted, not created.
+        recommendationKeys: ['kofta-kids-meal', 'sausage-pasta'],
       },
       {
         key: 'pasta-with-ground-beef',
@@ -705,6 +825,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 20,
         compareAtPrice: 25,
         calories: 500,
+        recommendationKeys: ['fishah-sandwich', 'green-salad', 'awsal-kebab-sandwich'],
       },
       {
         key: 'plain-pasta',
@@ -714,6 +835,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Delicious pasta cooked with a special sauce.',
         basePrice: 20,
         calories: 327,
+        recommendationKeys: ['pepsi', 'sausage-hawawshi', 'grilled-liver-sandwich'],
       },
       {
         key: 'rice',
@@ -723,6 +845,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         descriptionEn: 'Cooked white rice.',
         basePrice: 10,
         calories: 292,
+        recommendationKeys: ['pepsi', 'orange-mirinda', 'bread'],
       },
       {
         // Source screenshots showed two near-identical English labels
@@ -736,6 +859,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 136,
         compareAtPrice: 170,
         calories: 2300,
+        recommendationKeys: ['tarb-sandwich', 'grilled-liver-plate', 'lamb-chops-dish'],
       },
       {
         key: 'kilo-kofta',
@@ -746,6 +870,7 @@ export const VO3_MENU: Vo3CategorySeed[] = [
         basePrice: 120,
         compareAtPrice: 150,
         calories: 2740,
+        recommendationKeys: ['grilled-liver-plate', 'fishah-and-tuhal-sandwich', 'mix-chef-plate'],
       },
     ],
   },
