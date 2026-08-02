@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaClient } from '@prisma/client';
 import { PasswordService } from '../src/modules/auth/password.service';
+import { VO3_MENU, type Vo3VariantSeed } from './data/vo3-menu.data';
 
 /**
- * Phase 1 development seed.
+ * Kebda Zaman seed.
  *
  * Idempotent: every row is upserted against a deterministic UUID derived from a
  * stable human-readable key, so re-running this script never creates duplicates
@@ -13,13 +14,11 @@ import { PasswordService } from '../src/modules/auth/password.service';
  * operational config an admin has edited via the admin API is never
  * clobbered back to defaults by a redeploy.
  *
- * Contains only the baseline data required by BACKEND_IMPLEMENTATION_PLAN.md
- * Phase 1: the RestaurantSettings singleton, the initial categories, sample
- * menu items with variants/add-ons, and a seeded admin account. This is
- * representative development data (the original Flutter FakeMenuRepository
- * lives on a separate machine and is out of reach here) — it mirrors its
- * documented shape (6 categories, 10 items with variants/add-ons) per
- * PROJECT_CURRENT_STATE_AUDIT.md §7.
+ * Seeds the RestaurantSettings singleton, the seeded admin accounts, and the
+ * real approved VO3 menu (categories + menu items + variants, from
+ * prisma/data/vo3-menu.data.ts). The original Phase-1 development fake
+ * catalog is no longer seeded — retireLegacyFakeCatalog() soft-retires
+ * whatever fake rows an earlier seed run already created.
  *
  * No plaintext passwords or production secrets are seeded: the admin account
  * is created with passwordHash = null. Credential provisioning is a Phase 2
@@ -45,216 +44,33 @@ function money(value: number): Decimal {
   return new Decimal(value.toFixed(2));
 }
 
-interface AddonSeed {
-  key: string;
-  nameAr: string;
-  nameEn: string;
-  price: number;
-}
-
-interface AddonGroupSeed {
-  key: string;
-  titleAr: string;
-  titleEn: string;
-  isRequired: boolean;
-  minSelect: number;
-  maxSelect: number;
-  addons: AddonSeed[];
-}
-
-interface VariantSeed {
-  key: string;
-  nameAr: string;
-  nameEn: string;
-  priceDelta: number;
-  isDefault: boolean;
-}
-
-interface MenuItemSeed {
-  key: string;
-  categoryKey: string;
-  nameAr: string;
-  nameEn: string;
-  descriptionAr: string;
-  descriptionEn: string;
-  basePrice: number;
-  isPopular?: boolean;
-  variants?: VariantSeed[];
-  addonGroups?: AddonGroupSeed[];
-}
-
-const CATEGORIES = [
-  { key: 'kabsah', nameAr: 'كبسة', nameEn: 'Kabsah', displayOrder: 0 },
-  { key: 'kebda', nameAr: 'كبدة', nameEn: 'Kebda', displayOrder: 1 },
-  { key: 'alexandrian', nameAr: 'اسكندراني', nameEn: 'Alexandrian', displayOrder: 2 },
-  { key: 'extras', nameAr: 'إضافات', nameEn: 'Extras', displayOrder: 3 },
-  { key: 'drinks', nameAr: 'مشروبات', nameEn: 'Drinks', displayOrder: 4 },
-  { key: 'desserts', nameAr: 'حلويات', nameEn: 'Desserts', displayOrder: 5 },
+/**
+ * Phase-1 development fake catalog — no longer seeded (replaced below by the
+ * real VO3 menu). Kept only as the deterministic-key list needed to retire
+ * the old rows still sitting in already-seeded databases; see
+ * retireLegacyFakeCatalog(). Never reseed these — only retire them.
+ */
+const LEGACY_FAKE_CATEGORY_KEYS = [
+  'kabsah',
+  'kebda',
+  'alexandrian',
+  'extras',
+  'drinks',
+  'desserts',
 ] as const;
 
-const MENU_ITEMS: MenuItemSeed[] = [
-  {
-    key: 'kebda-sandwich',
-    categoryKey: 'kebda',
-    nameAr: 'سندوتش كبدة إسكندراني',
-    nameEn: 'Alexandrian Kebda Sandwich',
-    descriptionAr: 'كبدة طازة مقلية في زبدة بلدي مع الشطة والدقة',
-    descriptionEn: 'Fresh liver sautéed in ghee, served with chili and dukkah',
-    basePrice: 45,
-    isPopular: true,
-    variants: [
-      { key: 'regular', nameAr: 'عادي', nameEn: 'Regular', priceDelta: 0, isDefault: true },
-      { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 15, isDefault: false },
-    ],
-    addonGroups: [
-      {
-        key: 'toppings',
-        titleAr: 'إضافات',
-        titleEn: 'Toppings',
-        isRequired: false,
-        minSelect: 0,
-        maxSelect: 3,
-        addons: [
-          { key: 'extra-tahini', nameAr: 'طحينة زيادة', nameEn: 'Extra Tahini', price: 5 },
-          { key: 'hot-pepper', nameAr: 'فلفل حار', nameEn: 'Hot Pepper', price: 0 },
-          { key: 'pickled-onion', nameAr: 'بصل مخلل', nameEn: 'Pickled Onion', price: 0 },
-        ],
-      },
-    ],
-  },
-  {
-    key: 'kebda-plate',
-    categoryKey: 'kebda',
-    nameAr: 'طبق كبدة',
-    nameEn: 'Kebda Plate',
-    descriptionAr: 'طبق كبدة كاملة مع أرز وسلطة',
-    descriptionEn: 'Full liver plate served with rice and salad',
-    basePrice: 80,
-    variants: [
-      { key: 'half', nameAr: 'نص طبق', nameEn: 'Half Plate', priceDelta: 0, isDefault: true },
-      { key: 'full', nameAr: 'طبق كامل', nameEn: 'Full Plate', priceDelta: 35, isDefault: false },
-    ],
-  },
-  {
-    key: 'chicken-kabsah',
-    categoryKey: 'kabsah',
-    nameAr: 'كبسة فراخ',
-    nameEn: 'Chicken Kabsah',
-    descriptionAr: 'أرز بسمتي بالبهارات مع فراخ مشوية',
-    descriptionEn: 'Spiced basmati rice with grilled chicken',
-    basePrice: 95,
-    isPopular: true,
-    variants: [
-      { key: 'half', nameAr: 'نص فرخة', nameEn: 'Half Chicken', priceDelta: 0, isDefault: true },
-      {
-        key: 'full',
-        nameAr: 'فرخة كاملة',
-        nameEn: 'Full Chicken',
-        priceDelta: 40,
-        isDefault: false,
-      },
-    ],
-    addonGroups: [
-      {
-        key: 'extras',
-        titleAr: 'إضافات',
-        titleEn: 'Extras',
-        isRequired: false,
-        minSelect: 0,
-        maxSelect: 2,
-        addons: [
-          { key: 'side-salad', nameAr: 'سلطة', nameEn: 'Side Salad', price: 10 },
-          { key: 'white-sauce', nameAr: 'صوص أبيض', nameEn: 'White Sauce', price: 5 },
-        ],
-      },
-    ],
-  },
-  {
-    key: 'meat-kabsah',
-    categoryKey: 'kabsah',
-    nameAr: 'كبسة لحم',
-    nameEn: 'Meat Kabsah',
-    descriptionAr: 'أرز بسمتي بالبهارات مع قطع لحم ضاني',
-    descriptionEn: 'Spiced basmati rice with tender lamb pieces',
-    basePrice: 120,
-  },
-  {
-    key: 'alex-sausage',
-    categoryKey: 'alexandrian',
-    nameAr: 'سندوتش سجق اسكندراني',
-    nameEn: 'Alexandrian Sausage Sandwich',
-    descriptionAr: 'سجق بلدي حار مقلي في الطماطم والفلفل',
-    descriptionEn: 'Spicy homemade sausage sautéed with tomato and pepper',
-    basePrice: 40,
-    addonGroups: [
-      {
-        key: 'toppings',
-        titleAr: 'إضافات',
-        titleEn: 'Toppings',
-        isRequired: false,
-        minSelect: 0,
-        maxSelect: 2,
-        addons: [
-          { key: 'cheese', nameAr: 'جبنة', nameEn: 'Cheese', price: 8 },
-          { key: 'hot-pepper', nameAr: 'فلفل حار', nameEn: 'Hot Pepper', price: 0 },
-        ],
-      },
-    ],
-  },
-  {
-    key: 'alex-fatta',
-    categoryKey: 'alexandrian',
-    nameAr: 'فتة اسكندراني',
-    nameEn: 'Alexandrian Fatta',
-    descriptionAr: 'أرز وعيش محمص مع صوص طماطم وثوم وقطع لحمة',
-    descriptionEn: 'Rice and toasted bread with tomato-garlic sauce and beef',
-    basePrice: 65,
-  },
-  {
-    key: 'fries',
-    categoryKey: 'extras',
-    nameAr: 'بطاطس محمرة',
-    nameEn: 'French Fries',
-    descriptionAr: 'بطاطس مقرمشة طازة',
-    descriptionEn: 'Crispy fresh-cut fries',
-    basePrice: 25,
-    variants: [
-      { key: 'small', nameAr: 'صغير', nameEn: 'Small', priceDelta: 0, isDefault: true },
-      { key: 'large', nameAr: 'كبير', nameEn: 'Large', priceDelta: 10, isDefault: false },
-    ],
-  },
-  {
-    key: 'tahini-salad',
-    categoryKey: 'extras',
-    nameAr: 'سلطة طحينة',
-    nameEn: 'Tahini Salad',
-    descriptionAr: 'طحينة بلدي بزيت الزيتون',
-    descriptionEn: 'Homemade tahini with olive oil',
-    basePrice: 15,
-  },
-  {
-    key: 'soft-drink',
-    categoryKey: 'drinks',
-    nameAr: 'مياه غازية',
-    nameEn: 'Soft Drink',
-    descriptionAr: 'مشروب غازي بارد 250 مل',
-    descriptionEn: 'Chilled 250ml soft drink',
-    basePrice: 15,
-    variants: [
-      { key: 'cola', nameAr: 'كولا', nameEn: 'Cola', priceDelta: 0, isDefault: true },
-      { key: 'lemon', nameAr: 'ليمون', nameEn: 'Lemon', priceDelta: 0, isDefault: false },
-    ],
-  },
-  {
-    key: 'om-ali',
-    categoryKey: 'desserts',
-    nameAr: 'أم علي',
-    nameEn: 'Om Ali',
-    descriptionAr: 'حلوى مصرية تقليدية بالمكسرات والقشطة',
-    descriptionEn: 'Traditional Egyptian bread pudding with nuts and cream',
-    basePrice: 35,
-  },
-];
+const LEGACY_FAKE_MENU_ITEM_KEYS = [
+  'kebda-sandwich',
+  'kebda-plate',
+  'chicken-kabsah',
+  'meat-kabsah',
+  'alex-sausage',
+  'alex-fatta',
+  'fries',
+  'tahini-salad',
+  'soft-drink',
+  'om-ali',
+] as const;
 
 const SEED_WEEKLY_HOURS = Array.from({ length: 7 }, (_, dayOfWeek) => ({
   dayOfWeek,
@@ -370,10 +186,15 @@ async function seedRealAdmin(): Promise<void> {
   }
 }
 
-async function seedCategories(): Promise<Map<string, string>> {
+/**
+ * Seeds the 8 approved VO3 categories. Category order in VO3_MENU IS the
+ * approved display order — displayOrder is the array index, not hand-typed,
+ * so reordering the data file is the only way to change it.
+ */
+export async function seedVo3Categories(): Promise<Map<string, string>> {
   const categoryIds = new Map<string, string>();
 
-  for (const category of CATEGORIES) {
+  for (const [index, category] of VO3_MENU.entries()) {
     const categoryId = id(`category:${category.key}`);
     categoryIds.set(category.key, categoryId);
 
@@ -382,14 +203,17 @@ async function seedCategories(): Promise<Map<string, string>> {
       update: {
         nameAr: category.nameAr,
         nameEn: category.nameEn,
-        displayOrder: category.displayOrder,
+        iconUrl: null,
+        displayOrder: index,
         isActive: true,
+        deletedAt: null,
       },
       create: {
         id: categoryId,
         nameAr: category.nameAr,
         nameEn: category.nameEn,
-        displayOrder: category.displayOrder,
+        iconUrl: null,
+        displayOrder: index,
         isActive: true,
       },
     });
@@ -398,111 +222,135 @@ async function seedCategories(): Promise<Map<string, string>> {
   return categoryIds;
 }
 
-async function seedMenuItems(categoryIds: Map<string, string>): Promise<void> {
-  for (const item of MENU_ITEMS) {
-    const categoryId = categoryIds.get(item.categoryKey);
+/**
+ * Seeds every approved VO3 menu item (metadata set explicitly every run, so
+ * a previous seed run can never leave a stale calories/compareAtPrice/badge
+ * value behind) and its variants. Returns the full set of real menu item ids
+ * so retireLegacyFakeCatalog() never retires a real row.
+ */
+export async function seedVo3MenuItems(categoryIds: Map<string, string>): Promise<Set<string>> {
+  const menuItemIds = new Set<string>();
+
+  for (const category of VO3_MENU) {
+    const categoryId = categoryIds.get(category.key);
     if (!categoryId) {
-      throw new Error(`Unknown category key "${item.categoryKey}" for menu item "${item.key}"`);
+      throw new Error(`Unknown VO3 category key "${category.key}"`);
     }
 
-    const menuItemId = id(`menu-item:${item.key}`);
-    const imageUrl = `https://picsum.photos/seed/kebda-zaman-${item.key}/600/400`;
+    for (const [itemIndex, item] of category.items.entries()) {
+      const menuItemId = id(`menu-item:${item.key}`);
+      menuItemIds.add(menuItemId);
 
-    await prisma.menuItem.upsert({
-      where: { id: menuItemId },
-      update: {
+      const data = {
         categoryId,
         nameAr: item.nameAr,
         nameEn: item.nameEn,
         descriptionAr: item.descriptionAr,
         descriptionEn: item.descriptionEn,
         basePrice: money(item.basePrice),
-        imageUrl,
+        compareAtPrice: item.compareAtPrice !== undefined ? money(item.compareAtPrice) : null,
+        calories: item.calories ?? null,
+        badge: item.badge ?? null,
+        imageUrl: null,
         isAvailable: true,
-        isPopular: item.isPopular ?? false,
-      },
-      create: {
-        id: menuItemId,
-        categoryId,
-        nameAr: item.nameAr,
-        nameEn: item.nameEn,
-        descriptionAr: item.descriptionAr,
-        descriptionEn: item.descriptionEn,
-        basePrice: money(item.basePrice),
-        imageUrl,
-        isAvailable: true,
-        isPopular: item.isPopular ?? false,
-      },
+        isPopular: false,
+        displayOrder: itemIndex,
+        deletedAt: null,
+      };
+
+      await prisma.menuItem.upsert({
+        where: { id: menuItemId },
+        update: data,
+        create: { id: menuItemId, ...data },
+      });
+
+      await syncVo3Variants(menuItemId, item.key, item.variants ?? []);
+    }
+  }
+
+  return menuItemIds;
+}
+
+/**
+ * Idempotently syncs one item's variants to exactly the approved set, in the
+ * approved order (displayOrder = array index). A variant no longer in the
+ * dataset is deactivated, never deleted — a CartItem may still reference it.
+ */
+async function syncVo3Variants(
+  menuItemId: string,
+  itemKey: string,
+  variants: Vo3VariantSeed[],
+): Promise<void> {
+  const keptIds: string[] = [];
+
+  for (const [index, variant] of variants.entries()) {
+    const variantId = id(`variant:${itemKey}:${variant.key}`);
+    keptIds.push(variantId);
+
+    const data = {
+      menuItemId,
+      nameAr: variant.nameAr,
+      nameEn: variant.nameEn,
+      priceDelta: money(variant.priceDelta),
+      isDefault: variant.isDefault,
+      isActive: true,
+      displayOrder: index,
+    };
+    await prisma.itemVariant.upsert({
+      where: { id: variantId },
+      update: data,
+      create: { id: variantId, ...data },
     });
+  }
 
-    for (const variant of item.variants ?? []) {
-      const variantId = id(`variant:${item.key}:${variant.key}`);
-      await prisma.itemVariant.upsert({
-        where: { id: variantId },
-        update: {
-          menuItemId,
-          nameAr: variant.nameAr,
-          nameEn: variant.nameEn,
-          priceDelta: money(variant.priceDelta),
-          isDefault: variant.isDefault,
-          isActive: true,
-        },
-        create: {
-          id: variantId,
-          menuItemId,
-          nameAr: variant.nameAr,
-          nameEn: variant.nameEn,
-          priceDelta: money(variant.priceDelta),
-          isDefault: variant.isDefault,
-          isActive: true,
-        },
+  await prisma.itemVariant.updateMany({
+    where: { menuItemId, id: { notIn: keptIds } },
+    data: { isActive: false },
+  });
+}
+
+/**
+ * Soft-retires the Phase-1 fake catalog now superseded by the real VO3 menu:
+ * old fake MenuItems get deletedAt + isAvailable: false, then old fake
+ * Categories get deletedAt + isActive: false (only once none of their
+ * MenuItems are still active). Never a hard delete — CartItem/OrderItem hold
+ * live/snapshot references respectively. The `deletedAt: null` guard on every
+ * where-clause makes this idempotent: a second run matches zero rows and
+ * never reactivates anything. `realCategoryIds`/`realMenuItemIds` guard
+ * against ever retiring a real row, in case a legacy key were ever reused.
+ */
+export async function retireLegacyFakeCatalog(
+  realCategoryIds: Set<string>,
+  realMenuItemIds: Set<string>,
+): Promise<void> {
+  const now = new Date();
+
+  const fakeMenuItemIds = LEGACY_FAKE_MENU_ITEM_KEYS.map((key) => id(`menu-item:${key}`)).filter(
+    (menuItemId) => !realMenuItemIds.has(menuItemId),
+  );
+  if (fakeMenuItemIds.length > 0) {
+    await prisma.menuItem.updateMany({
+      where: { id: { in: fakeMenuItemIds }, deletedAt: null },
+      data: { deletedAt: now, isAvailable: false },
+    });
+  }
+
+  const fakeCategoryIds = LEGACY_FAKE_CATEGORY_KEYS.map((key) => id(`category:${key}`)).filter(
+    (categoryId) => !realCategoryIds.has(categoryId),
+  );
+  if (fakeCategoryIds.length > 0) {
+    const stillActiveItems = await prisma.menuItem.findMany({
+      where: { categoryId: { in: fakeCategoryIds }, deletedAt: null },
+      select: { categoryId: true },
+    });
+    const blockedCategoryIds = new Set(stillActiveItems.map((item) => item.categoryId));
+    const categoryIdsToRetire = fakeCategoryIds.filter((catId) => !blockedCategoryIds.has(catId));
+
+    if (categoryIdsToRetire.length > 0) {
+      await prisma.category.updateMany({
+        where: { id: { in: categoryIdsToRetire }, deletedAt: null },
+        data: { deletedAt: now, isActive: false },
       });
-    }
-
-    for (const group of item.addonGroups ?? []) {
-      const groupId = id(`addon-group:${item.key}:${group.key}`);
-      await prisma.addonGroup.upsert({
-        where: { id: groupId },
-        update: {
-          menuItemId,
-          titleAr: group.titleAr,
-          titleEn: group.titleEn,
-          isRequired: group.isRequired,
-          minSelect: group.minSelect,
-          maxSelect: group.maxSelect,
-        },
-        create: {
-          id: groupId,
-          menuItemId,
-          titleAr: group.titleAr,
-          titleEn: group.titleEn,
-          isRequired: group.isRequired,
-          minSelect: group.minSelect,
-          maxSelect: group.maxSelect,
-        },
-      });
-
-      for (const addon of group.addons) {
-        const addonId = id(`addon:${item.key}:${group.key}:${addon.key}`);
-        await prisma.addon.upsert({
-          where: { id: addonId },
-          update: {
-            addonGroupId: groupId,
-            nameAr: addon.nameAr,
-            nameEn: addon.nameEn,
-            price: money(addon.price),
-            isAvailable: true,
-          },
-          create: {
-            id: addonId,
-            addonGroupId: groupId,
-            nameAr: addon.nameAr,
-            nameEn: addon.nameEn,
-            price: money(addon.price),
-            isAvailable: true,
-          },
-        });
-      }
     }
   }
 }
@@ -511,11 +359,14 @@ async function main(): Promise<void> {
   await seedRestaurantSettings();
   await seedAdmin();
   await seedRealAdmin();
-  const categoryIds = await seedCategories();
-  await seedMenuItems(categoryIds);
 
+  const categoryIds = await seedVo3Categories();
+  const menuItemIds = await seedVo3MenuItems(categoryIds);
+  await retireLegacyFakeCatalog(new Set(categoryIds.values()), menuItemIds);
+
+  const itemCount = VO3_MENU.reduce((sum, category) => sum + category.items.length, 0);
   console.log(
-    `Seed complete: ${CATEGORIES.length} categories, ${MENU_ITEMS.length} menu items, 1 restaurant settings row, 2 admin users.`,
+    `Seed complete: ${VO3_MENU.length} categories, ${itemCount} menu items, 1 restaurant settings row, 2 admin users.`,
   );
 }
 

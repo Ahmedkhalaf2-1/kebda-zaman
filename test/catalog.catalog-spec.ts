@@ -95,21 +95,56 @@ describe('Catalog (integration)', () => {
 
   describe('GET /menu', () => {
     it('returns items with nested variants and addonGroups/addons as numbers, not strings', async () => {
-      const res = await request(app.getHttpServer()).get('/api/v1/menu');
-      expect(res.status).toBe(200);
-      expect(res.body.length).toBeGreaterThanOrEqual(10); // Phase 1 seed
+      // Own fixture rather than relying on the live seeded catalog: the real
+      // VO3 menu (this phase) has variants but, by design, no addon groups.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة الإضافات', nameEn: 'Addon Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const fixture = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف بإضافات',
+          nameEn: 'Addon Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          variants: {
+            create: [
+              {
+                nameAr: 'عادي',
+                nameEn: 'Regular',
+                priceDelta: new Prisma.Decimal('0.00'),
+                isDefault: true,
+              },
+            ],
+          },
+          addonGroups: {
+            create: [
+              {
+                titleAr: 'إضافات',
+                titleEn: 'Extras',
+                addons: {
+                  create: [{ nameAr: 'إضافة', nameEn: 'Extra', price: new Prisma.Decimal('2.00') }],
+                },
+              },
+            ],
+          },
+        },
+      });
 
-      const withVariant = res.body.find((i: { variants: unknown[] }) => i.variants.length > 0);
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/menu')
+        .query({ categoryId: category.id });
+      expect(res.status).toBe(200);
+
+      const withVariant = res.body.find((i: { id: string }) => i.id === fixture.id);
       expect(withVariant).toBeDefined();
       expect(typeof withVariant.basePrice).toBe('number');
       expect(typeof withVariant.variants[0].priceDelta).toBe('number');
-
-      const withAddon = res.body.find(
-        (i: { addonGroups: { addons: unknown[] }[] }) =>
-          i.addonGroups.length > 0 && i.addonGroups[0].addons.length > 0,
-      );
-      expect(withAddon).toBeDefined();
-      expect(typeof withAddon.addonGroups[0].addons[0].price).toBe('number');
+      expect(withVariant.addonGroups.length).toBeGreaterThan(0);
+      expect(typeof withVariant.addonGroups[0].addons[0].price).toBe('number');
     });
 
     it('filters by categoryId', async () => {
@@ -181,16 +216,48 @@ describe('Catalog (integration)', () => {
 
   describe('GET /menu/items/:id', () => {
     it('returns the full item with variants and addonGroups', async () => {
-      const list = await request(app.getHttpServer()).get('/api/v1/menu');
-      const target = list.body.find(
-        (i: { variants: unknown[]; addonGroups: unknown[] }) =>
-          i.variants.length > 0 && i.addonGroups.length > 0,
-      );
-      expect(target).toBeDefined();
+      // Own fixture rather than relying on the live seeded catalog: the real
+      // VO3 menu (this phase) has variants but, by design, no addon groups.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة تفاصيل الصنف', nameEn: 'Item Detail Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const fixture = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف تفصيلي',
+          nameEn: 'Detail Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          variants: {
+            create: [
+              {
+                nameAr: 'عادي',
+                nameEn: 'Regular',
+                priceDelta: new Prisma.Decimal('0.00'),
+                isDefault: true,
+              },
+            ],
+          },
+          addonGroups: {
+            create: [
+              {
+                titleAr: 'إضافات',
+                titleEn: 'Extras',
+                addons: {
+                  create: [{ nameAr: 'إضافة', nameEn: 'Extra', price: new Prisma.Decimal('2.00') }],
+                },
+              },
+            ],
+          },
+        },
+      });
 
-      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${fixture.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.id).toBe(target.id);
+      expect(res.body.id).toBe(fixture.id);
       expect(res.body.variants.length).toBeGreaterThan(0);
       expect(res.body.addonGroups.length).toBeGreaterThan(0);
       expect(res.body.addonGroups[0]).toMatchObject({
@@ -369,18 +436,41 @@ describe('Catalog (integration)', () => {
 
   describe('Public list/search/featured stay lightweight', () => {
     it('list, search, and featured responses never include oftenOrderedWith', async () => {
-      const list = await request(app.getHttpServer()).get('/api/v1/menu');
-      expect(list.body.length).toBeGreaterThan(0);
+      // Own fixture for the featured/search checks rather than relying on the
+      // live seeded catalog having a popular or "kebda"-named item.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة اختبار الخفة', nameEn: 'Lightweight Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const popularItem = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف مميز كبدة',
+          nameEn: 'Popular Kebda Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          isPopular: true,
+        },
+      });
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/menu')
+        .query({ categoryId: category.id });
+      expect(list.body.some((i: { id: string }) => i.id === popularItem.id)).toBe(true);
       expect(list.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
 
       const search = await request(app.getHttpServer())
         .get('/api/v1/menu/search')
-        .query({ q: 'kebda' });
-      expect(search.body.length).toBeGreaterThan(0);
+        .query({ q: 'Popular Kebda Fixture' });
+      expect(search.body.some((i: { id: string }) => i.id === popularItem.id)).toBe(true);
       expect(search.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
 
       const featured = await request(app.getHttpServer()).get('/api/v1/home/featured');
-      expect(featured.body.featured.length).toBeGreaterThan(0);
+      expect(featured.body.featured.some((i: { id: string }) => i.id === popularItem.id)).toBe(
+        true,
+      );
       expect(featured.body.featured.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
     });
   });
