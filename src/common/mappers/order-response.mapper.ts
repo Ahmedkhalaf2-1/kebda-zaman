@@ -7,6 +7,7 @@ import {
   OrderStatusHistory,
   PaymentMethod,
   PaymentStatus,
+  Prisma,
   User,
 } from '@prisma/client';
 import { toUserResponse, UserResponseDto } from './user-response.mapper';
@@ -152,6 +153,39 @@ export interface OrderDeliveryZoneDto {
   nameEn: string;
 }
 
+/** Order's immutable delivery-address snapshot (plan VO2.3). Built entirely
+ * from `deliveryAddressJson` at read time — never re-derived, never joined
+ * against the customer's live saved Address, so later edits/deletes of that
+ * Address never change what an existing order reports. `latitude`/
+ * `longitude` are always present in the response (nullable) even for orders
+ * placed before this phase, whose stored JSON never had those keys. */
+export interface OrderDeliveryAddressSnapshotDto {
+  latitude: number | null;
+  longitude: number | null;
+  [key: string]: unknown;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function toDeliveryAddressSnapshot(json: Prisma.JsonValue): OrderDeliveryAddressSnapshotDto {
+  const raw: Record<string, unknown> =
+    json !== null && typeof json === 'object' && !Array.isArray(json)
+      ? (json as Record<string, unknown>)
+      : {};
+  // PICKUP's `{ type: 'PICKUP' }` snapshot is untouched by this feature
+  // (plan VO2.3 §8) — no latitude/longitude keys are added to it.
+  if (raw.type === 'PICKUP') {
+    return raw as OrderDeliveryAddressSnapshotDto;
+  }
+  return {
+    ...raw,
+    latitude: isFiniteNumber(raw.latitude) ? raw.latitude : null,
+    longitude: isFiniteNumber(raw.longitude) ? raw.longitude : null,
+  };
+}
+
 export interface OrderResponseDto {
   id: string;
   orderNumber: string;
@@ -159,7 +193,7 @@ export interface OrderResponseDto {
   user: UserResponseDto;
   items: OrderItemResponseDto[];
   status: string;
-  deliveryAddress: unknown;
+  deliveryAddress: OrderDeliveryAddressSnapshotDto;
   deliveryMethod: DeliveryMethod;
   paymentMethod: string;
   paymentStatus: PaymentStatus;
@@ -192,7 +226,7 @@ export function toOrderResponse(
     user: toUserResponse(order.user),
     items: order.items.map(toOrderItemResponse),
     status: ORDER_STATUS_TO_FRONTEND[order.status],
-    deliveryAddress: order.deliveryAddressJson,
+    deliveryAddress: toDeliveryAddressSnapshot(order.deliveryAddressJson),
     deliveryMethod: order.deliveryMethod,
     paymentMethod: PAYMENT_METHOD_TO_FRONTEND[order.paymentMethod],
     paymentStatus: order.paymentStatus,

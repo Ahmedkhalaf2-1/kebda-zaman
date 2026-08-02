@@ -317,6 +317,63 @@ describe('Admin Orders (integration)', () => {
       const listed = list.body.find((o: { id: string }) => o.id === order.id);
       expect(listed).toMatchObject({ deliveryMethod: 'PICKUP', paymentStatus: 'PAID' });
     });
+
+    it('exposes nullable latitude/longitude on the DELIVERY order snapshot for both ADMIN and CASHIER (VO2.3)', async () => {
+      const admin = await registerAdmin();
+      const cashier = await registerCashier();
+      const customer = await registerCustomer();
+
+      await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${customer.accessToken}`)
+        .send({ menuItemId: checkoutItem.id, quantity: 1 });
+      const checkout = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${customer.accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: {
+            title: 'Home',
+            street: 'Main St',
+            building: '1',
+            city: 'Cairo',
+            latitude: 30.0444,
+            longitude: 31.2357,
+          },
+          deliveryZoneId,
+        });
+      expect(checkout.status).toBe(201);
+
+      for (const caller of [admin, cashier]) {
+        const detail = await request(app.getHttpServer())
+          .get(`/api/v1/admin/orders/${checkout.body.id}`)
+          .set('Authorization', `Bearer ${caller.accessToken}`);
+        expect(detail.status).toBe(200);
+        expect(detail.body.deliveryAddress.latitude).toBe(30.0444);
+        expect(detail.body.deliveryAddress.longitude).toBe(31.2357);
+      }
+    });
+
+    it('loads an order whose stored deliveryAddressJson predates coordinates without crashing (backward compatibility, VO2.3)', async () => {
+      const admin = await registerAdmin();
+      const order = await placeOrder((await registerCustomer()).accessToken, 'DELIVERY');
+
+      // Simulate a pre-VO2.3 row: no latitude/longitude keys in the stored JSON at all.
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          deliveryAddressJson: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
+        },
+      });
+
+      const detail = await request(app.getHttpServer())
+        .get(`/api/v1/admin/orders/${order.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.deliveryAddress.latitude).toBeNull();
+      expect(detail.body.deliveryAddress.longitude).toBeNull();
+    });
   });
 
   // ===========================================================================
@@ -422,7 +479,9 @@ describe('Admin Orders (integration)', () => {
       expect(settleCashOnDeliverySpy).toHaveBeenCalledTimes(1);
       expect(settleCashOnDeliverySpy).toHaveBeenCalledWith(order.id);
       expect(earnForOrderSpy).toHaveBeenCalledTimes(1);
-      expect(earnForOrderSpy).toHaveBeenCalledWith(expect.objectContaining({ id: order.id, status: 'DELIVERED' }));
+      expect(earnForOrderSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: order.id, status: 'DELIVERED' }),
+      );
     });
 
     it('walks the full valid PICKUP lifecycle (readyForPickup -> pickedUp), writing history, notifying, and settling exactly once on PICKED_UP', async () => {
@@ -552,7 +611,9 @@ describe('Admin Orders (integration)', () => {
       const customer = await registerCustomer();
       const order = await placeOrder(customer.accessToken, 'PICKUP');
 
-      expect((await patchStatus(cashier.accessToken, order.id, { status: 'confirmed' })).status).toBe(200);
+      expect(
+        (await patchStatus(cashier.accessToken, order.id, { status: 'confirmed' })).status,
+      ).toBe(200);
       const res = await patchStatus(admin.accessToken, order.id, { status: 'preparing' });
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('preparing');
@@ -718,20 +779,18 @@ describe('Admin Orders (integration)', () => {
           'readyForPickup',
         ]);
 
-        expect((await patchStatus(admin.accessToken, order.id, { status: 'pickedUp' })).status).toBe(200);
+        expect(
+          (await patchStatus(admin.accessToken, order.id, { status: 'pickedUp' })).status,
+        ).toBe(200);
 
         const pickedUpStatusRes = await request(app.getHttpServer())
           .get(`/api/v1/orders/${order.id}/status`)
           .set('Authorization', `Bearer ${customer.accessToken}`);
         expect(pickedUpStatusRes.status).toBe(200);
         expect(pickedUpStatusRes.body.status).toBe('pickedUp');
-        expect(pickedUpStatusRes.body.statusHistory.map((h: { status: string }) => h.status)).toEqual([
-          'pending',
-          'confirmed',
-          'preparing',
-          'readyForPickup',
-          'pickedUp',
-        ]);
+        expect(
+          pickedUpStatusRes.body.statusHistory.map((h: { status: string }) => h.status),
+        ).toEqual(['pending', 'confirmed', 'preparing', 'readyForPickup', 'pickedUp']);
       });
     });
 

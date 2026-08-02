@@ -242,9 +242,23 @@ export class OrdersService {
       });
     }
 
+    // Built field-by-field (not a raw spread) so the snapshot shape is
+    // stable regardless of what extra properties the DTO carries, and so a
+    // missing pin is always an explicit `null` — never defaulted to 0,0
+    // (plan VO2.3). Immutable from here on: later edits/deletes of the
+    // customer's saved Address never touch this snapshot.
     const addressSnapshot: Prisma.InputJsonValue =
       dto.deliveryMethod === 'DELIVERY' && dto.deliveryAddress
-        ? { ...dto.deliveryAddress }
+        ? {
+            title: dto.deliveryAddress.title,
+            street: dto.deliveryAddress.street,
+            building: dto.deliveryAddress.building,
+            floor: dto.deliveryAddress.floor ?? null,
+            apartment: dto.deliveryAddress.apartment ?? null,
+            city: dto.deliveryAddress.city,
+            latitude: dto.deliveryAddress.latitude ?? null,
+            longitude: dto.deliveryAddress.longitude ?? null,
+          }
         : { type: 'PICKUP' };
 
     for (let attempt = 1; attempt <= MAX_ORDER_NUMBER_ATTEMPTS; attempt += 1) {

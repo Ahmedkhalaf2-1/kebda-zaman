@@ -157,7 +157,12 @@ describe('Orders & Checkout (integration)', () => {
     });
 
     const zone = await prisma.deliveryZone.create({
-      data: { nameAr: 'منطقة الاختبار', nameEn: 'Test Zone', deliveryFee: D('15.00'), minimumOrder: D('0.00') },
+      data: {
+        nameAr: 'منطقة الاختبار',
+        nameEn: 'Test Zone',
+        deliveryFee: D('15.00'),
+        minimumOrder: D('0.00'),
+      },
     });
     deliveryZoneId = zone.id;
   });
@@ -604,7 +609,12 @@ describe('Orders & Checkout (integration)', () => {
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress, deliveryZoneId });
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress,
+          deliveryZoneId,
+        });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBeGreaterThan(0);
       expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
@@ -613,6 +623,72 @@ describe('Orders & Checkout (integration)', () => {
       // deliveryMethod: 'DELIVERY' (never fall back to the client default).
       expect(res.body.deliveryMethod).toBe('DELIVERY');
       expect(res.body.paymentStatus).toBe('PENDING');
+    });
+
+    it('snapshots latitude/longitude from the checkout payload and exposes them as nullable on read (VO2.3)', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: { ...deliveryAddress, latitude: 30.0444, longitude: 31.2357 },
+          deliveryZoneId,
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.deliveryAddress).toMatchObject({
+        ...deliveryAddress,
+        latitude: 30.0444,
+        longitude: 31.2357,
+      });
+
+      // Editing the saved address afterwards must never change the
+      // already-created order's snapshot — there is no saved-Address FK on
+      // Order to begin with (deliveryAddressJson is a plain copy), so this
+      // just re-reads the order to confirm the coordinates persisted as-is.
+      const detail = await request(app.getHttpServer())
+        .get(`/api/v1/orders/${res.body.id}`)
+        .set('Authorization', `Bearer ${accessToken}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.deliveryAddress.latitude).toBe(30.0444);
+      expect(detail.body.deliveryAddress.longitude).toBe(31.2357);
+    });
+
+    it('defaults latitude/longitude to null, never 0,0, when the checkout payload omits them (VO2.3)', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress,
+          deliveryZoneId,
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.deliveryAddress.latitude).toBeNull();
+      expect(res.body.deliveryAddress.longitude).toBeNull();
+    });
+
+    it('rejects an out-of-range latitude/longitude on checkout (VO2.3)', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: { ...deliveryAddress, latitude: 999, longitude: 31.2357 },
+          deliveryZoneId,
+        });
+      expect(res.status).toBe(400);
     });
 
     it('rejects a DELIVERY checkout without a deliveryZoneId', async () => {
@@ -637,7 +713,8 @@ describe('Orders & Checkout (integration)', () => {
         .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBe(0);
-      expect(res.body.deliveryAddress).toMatchObject({ type: 'PICKUP' });
+      // PICKUP is untouched by VO2.3 — no latitude/longitude keys are added.
+      expect(res.body.deliveryAddress).toEqual({ type: 'PICKUP' });
     });
   });
 });
