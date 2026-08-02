@@ -207,6 +207,53 @@ describe('Catalog (integration)', () => {
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('MENU_ITEM_NOT_FOUND');
     });
+
+    it('returns compareAtPrice as a JSON number, and null metadata fields as null', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة اختبار الميتاداتا', nameEn: 'Metadata Test Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const withMetadata = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف مخفض',
+          nameEn: 'Discounted Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('20.00'),
+          compareAtPrice: new Prisma.Decimal('25.00'),
+          calories: 450,
+          badge: 'BESTSELLER',
+          imageUrl: 'https://example.test/img.png',
+        },
+      });
+      const plain = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف عادي',
+          nameEn: 'Plain Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+        },
+      });
+
+      const withMetadataRes = await request(app.getHttpServer()).get(
+        `/api/v1/menu/items/${withMetadata.id}`,
+      );
+      expect(withMetadataRes.status).toBe(200);
+      expect(typeof withMetadataRes.body.compareAtPrice).toBe('number');
+      expect(withMetadataRes.body.compareAtPrice).toBe(25);
+      expect(withMetadataRes.body.calories).toBe(450);
+      expect(withMetadataRes.body.badge).toBe('BESTSELLER');
+
+      const plainRes = await request(app.getHttpServer()).get(`/api/v1/menu/items/${plain.id}`);
+      expect(plainRes.status).toBe(200);
+      expect(plainRes.body.compareAtPrice).toBeNull();
+      expect(plainRes.body.calories).toBeNull();
+      expect(plainRes.body.badge).toBeNull();
+    });
   });
 
   describe('GET /menu/search', () => {

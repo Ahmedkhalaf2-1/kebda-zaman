@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { MenuItemBadge, Prisma } from '@prisma/client';
 
 /**
  * Public catalog shape. Field-picked explicitly (never spread) so Prisma's
@@ -39,9 +39,12 @@ export interface MenuItemResponseDto {
   descriptionAr: string;
   descriptionEn: string;
   basePrice: number;
+  calories: number | null;
+  compareAtPrice: number | null;
   imageUrl: string | null;
   isAvailable: boolean;
   isPopular: boolean;
+  badge: MenuItemBadge | null;
   variants: ItemVariantResponseDto[];
   addonGroups: AddonGroupResponseDto[];
 }
@@ -79,9 +82,12 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    calories: item.calories,
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,
     isAvailable: item.isAvailable,
     isPopular: item.isPopular,
+    badge: item.badge,
     variants: item.variants.map((variant) => ({
       id: variant.id,
       nameAr: variant.nameAr,
@@ -162,9 +168,12 @@ export function toAdminMenuItemResponse(
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    calories: item.calories,
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,
     isAvailable: item.isAvailable,
     isPopular: item.isPopular,
+    badge: item.badge,
     displayOrder: item.displayOrder,
     variants: item.variants.map((variant) => ({
       id: variant.id,

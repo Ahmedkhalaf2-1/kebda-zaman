@@ -214,6 +214,7 @@ export class CatalogService {
 
   async createMenuItem(dto: MenuItemDto): Promise<AdminMenuItemResponseDto> {
     await this.assertCategoryExists(dto.categoryId);
+    this.assertValidCompareAtPrice(dto.basePrice, dto.compareAtPrice ?? null);
 
     const created = await this.prisma.menuItem.create({
       data: {
@@ -223,6 +224,9 @@ export class CatalogService {
         descriptionAr: dto.descriptionAr,
         descriptionEn: dto.descriptionEn,
         basePrice: dto.basePrice,
+        calories: dto.calories,
+        compareAtPrice: dto.compareAtPrice,
+        badge: dto.badge,
         imageUrl: dto.imageUrl,
         isAvailable: dto.isAvailable ?? true,
         isPopular: dto.isPopular ?? false,
@@ -281,6 +285,16 @@ export class CatalogService {
       await this.assertCategoryExists(dto.categoryId);
     }
 
+    // Tri-state: property omitted -> preserve existing value; property present as
+    // `null` -> clear it; property present with a value -> replace it.
+    const effectiveCalories = dto.calories !== undefined ? dto.calories : existing.calories;
+    const effectiveCompareAtPrice =
+      dto.compareAtPrice !== undefined
+        ? dto.compareAtPrice
+        : (existing.compareAtPrice?.toNumber() ?? null);
+    const effectiveBadge = dto.badge !== undefined ? dto.badge : existing.badge;
+    this.assertValidCompareAtPrice(dto.basePrice, effectiveCompareAtPrice);
+
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
         await tx.menuItem.update({
@@ -292,6 +306,9 @@ export class CatalogService {
             descriptionAr: dto.descriptionAr,
             descriptionEn: dto.descriptionEn,
             basePrice: dto.basePrice,
+            calories: effectiveCalories,
+            compareAtPrice: effectiveCompareAtPrice,
+            badge: effectiveBadge,
             imageUrl: dto.imageUrl,
             isAvailable: dto.isAvailable ?? existing.isAvailable,
             isPopular: dto.isPopular ?? existing.isPopular,
@@ -347,6 +364,16 @@ export class CatalogService {
       where: { id },
       data: { deletedAt: new Date(), isAvailable: false },
     });
+  }
+
+  /** compareAtPrice is a display-only "previous price" — never swapped, cleared, or recalculated here. */
+  private assertValidCompareAtPrice(basePrice: number, compareAtPrice: number | null): void {
+    if (compareAtPrice !== null && compareAtPrice <= basePrice) {
+      throw new UnprocessableEntityException({
+        message: 'Compare-at price must be greater than base price',
+        code: 'INVALID_COMPARE_AT_PRICE',
+      });
+    }
   }
 
   private async assertCategoryExists(categoryId: string): Promise<void> {

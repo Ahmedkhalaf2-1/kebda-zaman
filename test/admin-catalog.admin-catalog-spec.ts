@@ -330,6 +330,263 @@ describe('Admin Catalog (integration)', () => {
   });
 
   // ===========================================================================
+  describe('Menu item metadata (calories, compareAtPrice, badge)', () => {
+    async function setup() {
+      const admin = await registerAdmin();
+      const category = await request(app.getHttpServer())
+        .post('/api/v1/admin/categories')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCategoryPayload());
+      cleanupCategoryIds.push(category.body.id);
+      return { admin, categoryId: category.body.id as string };
+    }
+
+    describe('create', () => {
+      it('creates an item with calories, compareAtPrice, and a BESTSELLER badge', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(
+            newMenuItemPayload(categoryId, {
+              basePrice: 20,
+              calories: 450,
+              compareAtPrice: 25,
+              badge: 'BESTSELLER',
+            }),
+          );
+        expect(res.status).toBe(201);
+        expect(res.body.calories).toBe(450);
+        expect(res.body.compareAtPrice).toBe(25);
+        expect(res.body.badge).toBe('BESTSELLER');
+      });
+
+      it('creates an item with a TOP_RATED badge', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: 'TOP_RATED' }));
+        expect(res.status).toBe(201);
+        expect(res.body.badge).toBe('TOP_RATED');
+      });
+
+      it('creates an item with no calories, no compareAtPrice, and no badge (all null)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId));
+        expect(res.status).toBe(201);
+        expect(res.body.calories).toBeNull();
+        expect(res.body.compareAtPrice).toBeNull();
+        expect(res.body.badge).toBeNull();
+      });
+    });
+
+    describe('update', () => {
+      it('updates calories', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: 300 }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: 500 }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.calories).toBe(500);
+      });
+
+      it('clears calories using an explicit null', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: 300 }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: null }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.calories).toBeNull();
+      });
+
+      it('updates compareAtPrice', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 25 }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 30 }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.compareAtPrice).toBe(30);
+      });
+
+      it('clears compareAtPrice using an explicit null', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 25 }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: null }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.compareAtPrice).toBeNull();
+      });
+
+      it('changes badge from BESTSELLER to TOP_RATED', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: 'BESTSELLER' }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: 'TOP_RATED' }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.badge).toBe('TOP_RATED');
+      });
+
+      it('clears badge using an explicit null', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: 'BESTSELLER' }));
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: null }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.badge).toBeNull();
+      });
+    });
+
+    describe('validation', () => {
+      it('rejects a compareAtPrice equal to basePrice (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 20 }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('INVALID_COMPARE_AT_PRICE');
+      });
+
+      it('rejects a compareAtPrice below basePrice (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 15 }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('INVALID_COMPARE_AT_PRICE');
+      });
+
+      it('rejects an unsupported badge string (400)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { badge: 'NOT_A_REAL_BADGE' }));
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects negative calories (400)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: -10 }));
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects decimal calories (400)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { calories: 250.5 }));
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects negative compareAtPrice (400)', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { compareAtPrice: -5 }));
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects an update that raises basePrice past an unchanged compareAtPrice (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 20, compareAtPrice: 25 }));
+
+        // basePrice moves to 30 without touching compareAtPrice in this PUT body —
+        // the stored compareAtPrice (25) would no longer be greater than basePrice.
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${created.body.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { basePrice: 30 }));
+        expect(updated.status).toBe(422);
+        expect(updated.body.code).toBe('INVALID_COMPARE_AT_PRICE');
+
+        const unchanged = await prisma.menuItem.findUnique({ where: { id: created.body.id } });
+        expect(unchanged?.basePrice.toNumber()).toBe(20);
+      });
+    });
+
+    describe('serialization', () => {
+      it('returns compareAtPrice as a JSON number in the admin response, and independent badge/isPopular', async () => {
+        const { admin, categoryId } = await setup();
+        const withBadge = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(
+            newMenuItemPayload(categoryId, {
+              basePrice: 20,
+              compareAtPrice: 25,
+              badge: 'BESTSELLER',
+              isPopular: false,
+            }),
+          );
+        expect(withBadge.status).toBe(201);
+        expect(typeof withBadge.body.compareAtPrice).toBe('number');
+        expect(withBadge.body.badge).toBe('BESTSELLER');
+        expect(withBadge.body.isPopular).toBe(false);
+
+        const noBadgePopular = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { isPopular: true }));
+        expect(noBadgePopular.status).toBe(201);
+        expect(noBadgePopular.body.badge).toBeNull();
+        expect(noBadgePopular.body.isPopular).toBe(true);
+        expect(noBadgePopular.body.calories).toBeNull();
+        expect(noBadgePopular.body.compareAtPrice).toBeNull();
+      });
+    });
+  });
+
+  // ===========================================================================
   describe('Variants management', () => {
     it('creates, updates in place, removes, and adds variants on PUT', async () => {
       const admin = await registerAdmin();

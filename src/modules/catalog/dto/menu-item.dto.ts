@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -12,6 +13,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { MenuItemBadge } from '@prisma/client';
 
 export class VariantDto {
   // Present when updating an existing variant; absent when adding a new one.
@@ -142,6 +144,19 @@ export class MenuItemDto {
   @Min(0)
   basePrice!: number;
 
+  // Optional kcal value. Omitted -> preserve/unset; explicit null -> clear.
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  calories?: number | null;
+
+  // Previous/original display price for a discounted item. Omitted -> preserve/unset;
+  // explicit null -> clear. Must be strictly greater than basePrice (validated in the service).
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  compareAtPrice?: number | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(2048)
@@ -154,6 +169,12 @@ export class MenuItemDto {
   @IsOptional()
   @IsBoolean()
   isPopular?: boolean;
+
+  // Manually set by the Admin, independent from isPopular. Omitted -> preserve;
+  // explicit null -> clear; never inferred from sales/popularity/analytics.
+  @IsOptional()
+  @IsEnum(MenuItemBadge)
+  badge?: MenuItemBadge | null;
 
   @IsOptional()
   @IsInt()
