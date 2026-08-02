@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -192,4 +193,15 @@ export class MenuItemDto {
   @ValidateNested({ each: true })
   @Type(() => AddonGroupDto)
   addonGroups?: AddonGroupDto[];
+
+  // "Often Ordered With" — outgoing recommended MenuItem IDs, in display order.
+  // Omitted -> leave current recommendations unchanged (update only); explicit
+  // [] -> remove all outgoing recommendations; IDs -> replace the full set.
+  // Duplicate/self-reference/existence checks happen in CatalogService, where
+  // the specific domain error codes are produced.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsUUID('4', { each: true })
+  recommendationItemIds?: string[];
 }

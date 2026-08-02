@@ -16,9 +16,11 @@ import {
 import {
   ADMIN_MENU_ITEM_INCLUDE,
   AdminMenuItemResponseDto,
+  MenuItemDetailResponseDto,
   MenuItemResponseDto,
   PUBLIC_MENU_ITEM_INCLUDE,
   toAdminMenuItemResponse,
+  toMenuItemDetailResponse,
   toMenuItemResponse,
 } from '../../common/mappers/menu-item-response.mapper';
 import { ListMenuItemsDto } from './dto/list-menu-items.dto';
@@ -28,6 +30,7 @@ import { AddonDto, AddonGroupDto, MenuItemDto, VariantDto } from './dto/menu-ite
 import { AdminListMenuItemsDto } from './dto/admin-list-menu-items.dto';
 
 const FEATURED_LIMIT = 10;
+const MAX_RECOMMENDATIONS = 3;
 const menuItemInclude = PUBLIC_MENU_ITEM_INCLUDE;
 
 @Injectable()
@@ -69,15 +72,39 @@ export class CatalogService {
     return items.map(toMenuItemResponse);
   }
 
-  async getMenuItem(id: string): Promise<MenuItemResponseDto> {
-    const item = await this.prisma.menuItem.findFirst({
-      where: { id, deletedAt: null },
-      include: menuItemInclude,
-    });
+  /**
+   * Only this endpoint expands "Often Ordered With" (plan VO3 Menu §8) — list/
+   * search/featured stay on the lightweight MenuItemResponseDto. Recommended
+   * items are fetched in the same round-trip as the item itself (no N+1), and
+   * filtered to what a customer could actually see: not soft-deleted, available,
+   * and under an active, non-deleted category.
+   */
+  async getMenuItem(id: string): Promise<MenuItemDetailResponseDto> {
+    const [item, recommendations] = await Promise.all([
+      this.prisma.menuItem.findFirst({
+        where: { id, deletedAt: null },
+        include: menuItemInclude,
+      }),
+      this.prisma.menuItemRecommendation.findMany({
+        where: {
+          menuItemId: id,
+          recommendedMenuItem: {
+            deletedAt: null,
+            isAvailable: true,
+            category: { deletedAt: null, isActive: true },
+          },
+        },
+        orderBy: { displayOrder: 'asc' },
+        include: { recommendedMenuItem: true },
+      }),
+    ]);
     if (!item) {
       throw new NotFoundException({ message: 'Menu item not found', code: 'MENU_ITEM_NOT_FOUND' });
     }
-    return toMenuItemResponse(item);
+    return toMenuItemDetailResponse(
+      item,
+      recommendations.map((recommendation) => recommendation.recommendedMenuItem),
+    );
   }
 
   async search(query: SearchMenuDto): Promise<MenuItemResponseDto[]> {
@@ -215,6 +242,10 @@ export class CatalogService {
   async createMenuItem(dto: MenuItemDto): Promise<AdminMenuItemResponseDto> {
     await this.assertCategoryExists(dto.categoryId);
     this.assertValidCompareAtPrice(dto.basePrice, dto.compareAtPrice ?? null);
+    if (dto.recommendationItemIds?.length) {
+      // The new item's own id doesn't exist yet, so self-reference can't occur here.
+      await this.validateRecommendationIds(dto.recommendationItemIds);
+    }
 
     const created = await this.prisma.menuItem.create({
       data: {
@@ -231,6 +262,14 @@ export class CatalogService {
         isAvailable: dto.isAvailable ?? true,
         isPopular: dto.isPopular ?? false,
         displayOrder: dto.displayOrder,
+        recommendations: dto.recommendationItemIds?.length
+          ? {
+              create: dto.recommendationItemIds.map((recommendedMenuItemId, index) => ({
+                recommendedMenuItemId,
+                displayOrder: index,
+              })),
+            }
+          : undefined,
         variants: dto.variants?.length
           ? {
               create: dto.variants.map((variant) => ({
@@ -294,6 +333,9 @@ export class CatalogService {
         : (existing.compareAtPrice?.toNumber() ?? null);
     const effectiveBadge = dto.badge !== undefined ? dto.badge : existing.badge;
     this.assertValidCompareAtPrice(dto.basePrice, effectiveCompareAtPrice);
+    if (dto.recommendationItemIds) {
+      await this.validateRecommendationIds(dto.recommendationItemIds, id);
+    }
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
@@ -321,6 +363,9 @@ export class CatalogService {
         }
         if (dto.addonGroups) {
           await this.syncAddonGroups(tx, id, dto.addonGroups);
+        }
+        if (dto.recommendationItemIds) {
+          await this.syncRecommendations(tx, id, dto.recommendationItemIds);
         }
 
         return tx.menuItem.findUniqueOrThrow({ where: { id }, include: ADMIN_MENU_ITEM_INCLUDE });
@@ -373,6 +418,94 @@ export class CatalogService {
         message: 'Compare-at price must be greater than base price',
         code: 'INVALID_COMPARE_AT_PRICE',
       });
+    }
+  }
+
+  /**
+   * Shared "Often Ordered With" validation for create/update. `currentMenuItemId`
+   * is omitted on create (the new item's id doesn't exist yet, so self-reference
+   * can't occur) and passed on update to catch a product recommending itself.
+   * Rejects the whole operation atomically — this only runs SELECT queries and
+   * is always called before any write, so nothing is left partially applied.
+   */
+  private async validateRecommendationIds(
+    recommendationItemIds: string[],
+    currentMenuItemId?: string,
+  ): Promise<void> {
+    if (recommendationItemIds.length === 0) {
+      return;
+    }
+    if (recommendationItemIds.length > MAX_RECOMMENDATIONS) {
+      throw new UnprocessableEntityException({
+        message: `A menu item cannot have more than ${MAX_RECOMMENDATIONS} recommendations`,
+        code: 'TOO_MANY_RECOMMENDATIONS',
+      });
+    }
+    if (new Set(recommendationItemIds).size !== recommendationItemIds.length) {
+      throw new UnprocessableEntityException({
+        message: 'Recommendation item IDs must be unique',
+        code: 'DUPLICATE_RECOMMENDATIONS',
+      });
+    }
+    if (currentMenuItemId && recommendationItemIds.includes(currentMenuItemId)) {
+      throw new UnprocessableEntityException({
+        message: 'A menu item cannot recommend itself',
+        code: 'SELF_RECOMMENDATION_NOT_ALLOWED',
+      });
+    }
+
+    const found = await this.prisma.menuItem.findMany({
+      where: { id: { in: recommendationItemIds }, deletedAt: null },
+      select: { id: true },
+    });
+    if (found.length !== recommendationItemIds.length) {
+      throw new UnprocessableEntityException({
+        message: 'One or more recommended menu items do not exist',
+        code: 'INVALID_RECOMMENDATION_ITEM',
+      });
+    }
+  }
+
+  /**
+   * Fully synchronizes this item's outgoing recommendations to exactly
+   * `recommendationItemIds`, in that order — deletes rows no longer present,
+   * creates newly-added targets, and updates displayOrder for retained ones.
+   * Deletions happen before creates, so a retained/reordered target's row is
+   * never touched by the unique (menuItemId, recommendedMenuItemId)
+   * constraint. Only this item's outgoing rows are touched — incoming
+   * recommendations (other items recommending this one) are untouched.
+   */
+  private async syncRecommendations(
+    tx: Prisma.TransactionClient,
+    menuItemId: string,
+    recommendationItemIds: string[],
+  ): Promise<void> {
+    const existing = await tx.menuItemRecommendation.findMany({
+      where: { menuItemId },
+      select: { id: true, recommendedMenuItemId: true },
+    });
+    const existingByTarget = new Map(existing.map((r) => [r.recommendedMenuItemId, r.id]));
+    const submittedTargets = new Set(recommendationItemIds);
+
+    const idsToDelete = existing
+      .filter((r) => !submittedTargets.has(r.recommendedMenuItemId))
+      .map((r) => r.id);
+    if (idsToDelete.length > 0) {
+      await tx.menuItemRecommendation.deleteMany({ where: { id: { in: idsToDelete } } });
+    }
+
+    for (const [index, recommendedMenuItemId] of recommendationItemIds.entries()) {
+      const existingId = existingByTarget.get(recommendedMenuItemId);
+      if (existingId) {
+        await tx.menuItemRecommendation.update({
+          where: { id: existingId },
+          data: { displayOrder: index },
+        });
+      } else {
+        await tx.menuItemRecommendation.create({
+          data: { menuItemId, recommendedMenuItemId, displayOrder: index },
+        });
+      }
     }
   }
 

@@ -256,6 +256,135 @@ describe('Catalog (integration)', () => {
     });
   });
 
+  describe('GET /menu/items/:id — oftenOrderedWith', () => {
+    async function makeItem(
+      categoryId: string,
+      overrides: Partial<Prisma.MenuItemUncheckedCreateInput> = {},
+    ) {
+      return prisma.menuItem.create({
+        data: {
+          categoryId,
+          nameAr: `صنف ${randomUUID()}`,
+          nameEn: `Item ${randomUUID()}`,
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          ...overrides,
+        },
+      });
+    }
+
+    it('returns oftenOrderedWith in configured order, with only the approved summary fields, excluding unavailable/soft-deleted/inactive-category/deleted-category recommendations', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة التوصيات', nameEn: 'Recommendations Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const inactiveCategory = await prisma.category.create({
+        data: { nameAr: 'فئة معطلة', nameEn: 'Inactive Rec Category', isActive: false },
+      });
+      cleanupCategoryIds.push(inactiveCategory.id);
+      const deletedCategory = await prisma.category.create({
+        data: { nameAr: 'فئة محذوفة', nameEn: 'Deleted Rec Category', deletedAt: new Date() },
+      });
+      cleanupCategoryIds.push(deletedCategory.id);
+
+      const target = await makeItem(category.id);
+      const validA = await makeItem(category.id, {
+        compareAtPrice: new Prisma.Decimal('15.00'),
+        calories: 300,
+        badge: 'BESTSELLER',
+      });
+      const validB = await makeItem(category.id);
+      const unavailable = await makeItem(category.id, { isAvailable: false });
+      const softDeleted = await makeItem(category.id, { deletedAt: new Date() });
+      const underInactiveCategory = await makeItem(inactiveCategory.id);
+      const underDeletedCategory = await makeItem(deletedCategory.id);
+
+      await prisma.menuItemRecommendation.createMany({
+        data: [
+          { menuItemId: target.id, recommendedMenuItemId: validA.id, displayOrder: 0 },
+          { menuItemId: target.id, recommendedMenuItemId: unavailable.id, displayOrder: 1 },
+          { menuItemId: target.id, recommendedMenuItemId: validB.id, displayOrder: 2 },
+          { menuItemId: target.id, recommendedMenuItemId: softDeleted.id, displayOrder: 3 },
+          {
+            menuItemId: target.id,
+            recommendedMenuItemId: underInactiveCategory.id,
+            displayOrder: 4,
+          },
+          {
+            menuItemId: target.id,
+            recommendedMenuItemId: underDeletedCategory.id,
+            displayOrder: 5,
+          },
+        ],
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith.map((i: { id: string }) => i.id)).toEqual([
+        validA.id,
+        validB.id,
+      ]);
+
+      const summary = res.body.oftenOrderedWith[0];
+      expect(Object.keys(summary).sort()).toEqual(
+        [
+          'id',
+          'categoryId',
+          'nameAr',
+          'nameEn',
+          'descriptionAr',
+          'descriptionEn',
+          'basePrice',
+          'compareAtPrice',
+          'calories',
+          'badge',
+          'imageUrl',
+          'isAvailable',
+          'isPopular',
+        ].sort(),
+      );
+      expect(typeof summary.compareAtPrice).toBe('number');
+      expect(summary.compareAtPrice).toBe(15);
+      expect(summary.badge).toBe('BESTSELLER');
+    });
+
+    it('returns [] when all recommendations are filtered out', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة فارغة', nameEn: 'Empty Recs Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const target = await makeItem(category.id);
+      const unavailable = await makeItem(category.id, { isAvailable: false });
+      await prisma.menuItemRecommendation.create({
+        data: { menuItemId: target.id, recommendedMenuItemId: unavailable.id, displayOrder: 0 },
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith).toEqual([]);
+    });
+  });
+
+  describe('Public list/search/featured stay lightweight', () => {
+    it('list, search, and featured responses never include oftenOrderedWith', async () => {
+      const list = await request(app.getHttpServer()).get('/api/v1/menu');
+      expect(list.body.length).toBeGreaterThan(0);
+      expect(list.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
+
+      const search = await request(app.getHttpServer())
+        .get('/api/v1/menu/search')
+        .query({ q: 'kebda' });
+      expect(search.body.length).toBeGreaterThan(0);
+      expect(search.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
+
+      const featured = await request(app.getHttpServer()).get('/api/v1/home/featured');
+      expect(featured.body.featured.length).toBeGreaterThan(0);
+      expect(featured.body.featured.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
+    });
+  });
+
   describe('GET /menu/search', () => {
     it('matches by English name (case-insensitive, partial)', async () => {
       const res = await request(app.getHttpServer())

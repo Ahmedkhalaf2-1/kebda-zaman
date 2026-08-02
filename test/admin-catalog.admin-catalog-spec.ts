@@ -587,6 +587,321 @@ describe('Admin Catalog (integration)', () => {
   });
 
   // ===========================================================================
+  describe('Menu item recommendations (Often Ordered With)', () => {
+    async function setup() {
+      const admin = await registerAdmin();
+      const category = await request(app.getHttpServer())
+        .post('/api/v1/admin/categories')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCategoryPayload());
+      cleanupCategoryIds.push(category.body.id);
+      return { admin, categoryId: category.body.id as string };
+    }
+
+    async function createItem(
+      admin: { accessToken: string },
+      categoryId: string,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, overrides));
+      return res.body;
+    }
+
+    describe('create', () => {
+      it('creates an item with three recommendations, stored in submitted order', async () => {
+        const { admin, categoryId } = await setup();
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        const c = await createItem(admin, categoryId);
+
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, b.id, c.id] }));
+        expect(created.status).toBe(201);
+        expect(created.body.recommendationItemIds).toEqual([a.id, b.id, c.id]);
+      });
+
+      it('creates an item with omitted recommendationItemIds returning []', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await createItem(admin, categoryId);
+        expect(created.recommendationItemIds).toEqual([]);
+      });
+
+      it('creates an item with an empty recommendationItemIds array returning []', async () => {
+        const { admin, categoryId } = await setup();
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [] }));
+        expect(res.status).toBe(201);
+        expect(res.body.recommendationItemIds).toEqual([]);
+      });
+
+      it('rolls back the entire MenuItem creation when a recommendation is invalid', async () => {
+        const { admin, categoryId } = await setup();
+        const countBefore = await prisma.menuItem.count({ where: { categoryId } });
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [randomUUID()] }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('INVALID_RECOMMENDATION_ITEM');
+
+        const countAfter = await prisma.menuItem.count({ where: { categoryId } });
+        expect(countAfter).toBe(countBefore);
+      });
+    });
+
+    describe('update', () => {
+      it('adds recommendations to an existing item', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+
+        const updated = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id] }));
+        expect(updated.status).toBe(200);
+        expect(updated.body.recommendationItemIds).toEqual([a.id]);
+      });
+
+      it('reorders existing recommendations', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, b.id] }));
+
+        const reordered = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [b.id, a.id] }));
+        expect(reordered.status).toBe(200);
+        expect(reordered.body.recommendationItemIds).toEqual([b.id, a.id]);
+      });
+
+      it('replaces one recommendation', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        const c = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, b.id] }));
+
+        const replaced = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, c.id] }));
+        expect(replaced.status).toBe(200);
+        expect(replaced.body.recommendationItemIds).toEqual([a.id, c.id]);
+      });
+
+      it('removes one recommendation', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, b.id] }));
+
+        const removed = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id] }));
+        expect(removed.status).toBe(200);
+        expect(removed.body.recommendationItemIds).toEqual([a.id]);
+      });
+
+      it('clears all recommendations with []', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id] }));
+
+        const cleared = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [] }));
+        expect(cleared.status).toBe(200);
+        expect(cleared.body.recommendationItemIds).toEqual([]);
+      });
+
+      it('preserves existing recommendations when the field is omitted', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const a = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id] }));
+
+        const untouched = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { nameEn: 'Renamed, recs untouched' }));
+        expect(untouched.status).toBe(200);
+        expect(untouched.body.recommendationItemIds).toEqual([a.id]);
+      });
+
+      it('does not alter incoming recommendation rows when updating outgoing recommendations', async () => {
+        const { admin, categoryId } = await setup();
+        const itemA = await createItem(admin, categoryId);
+        const itemB = await createItem(admin, categoryId);
+        const itemC = await createItem(admin, categoryId);
+
+        // B recommends A (an "incoming" recommendation for A).
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${itemB.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [itemA.id] }));
+
+        // A's own outgoing recommendations change independently.
+        await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${itemA.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [itemC.id] }));
+
+        const bAfter = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${itemB.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { nameEn: 'B unchanged recs' }));
+        expect(bAfter.status).toBe(200);
+        expect(bAfter.body.recommendationItemIds).toEqual([itemA.id]);
+
+        const incomingRow = await prisma.menuItemRecommendation.findFirst({
+          where: { menuItemId: itemB.id, recommendedMenuItemId: itemA.id },
+        });
+        expect(incomingRow).not.toBeNull();
+      });
+    });
+
+    describe('validation', () => {
+      it('rejects more than three recommendation IDs (400)', async () => {
+        const { admin, categoryId } = await setup();
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        const c = await createItem(admin, categoryId);
+        const d = await createItem(admin, categoryId);
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(
+            newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, b.id, c.id, d.id] }),
+          );
+        expect(res.status).toBe(400);
+      });
+
+      it('rejects duplicate recommendation IDs (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const a = await createItem(admin, categoryId);
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [a.id, a.id] }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('DUPLICATE_RECOMMENDATIONS');
+      });
+
+      it('rejects self-reference on update (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+
+        const res = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [target.id] }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('SELF_RECOMMENDATION_NOT_ALLOWED');
+      });
+
+      it('rejects a missing menu item ID (422)', async () => {
+        const { admin, categoryId } = await setup();
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [randomUUID()] }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('INVALID_RECOMMENDATION_ITEM');
+      });
+
+      it('rejects a soft-deleted menu item ID (422)', async () => {
+        const { admin, categoryId } = await setup();
+        const target = await createItem(admin, categoryId);
+        const deleted = await createItem(admin, categoryId);
+        await request(app.getHttpServer())
+          .delete(`/api/v1/admin/menu/items/${deleted.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`);
+
+        const res = await request(app.getHttpServer())
+          .put(`/api/v1/admin/menu/items/${target.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [deleted.id] }));
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('INVALID_RECOMMENDATION_ITEM');
+      });
+
+      it('rejects a malformed UUID via DTO validation (400)', async () => {
+        const { admin, categoryId } = await setup();
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: ['not-a-uuid'] }));
+        expect(res.status).toBe(400);
+      });
+    });
+
+    describe('admin response', () => {
+      it('returns recommendationItemIds ordered by displayOrder, in both detail and list responses', async () => {
+        const { admin, categoryId } = await setup();
+        const a = await createItem(admin, categoryId);
+        const b = await createItem(admin, categoryId);
+        const c = await createItem(admin, categoryId);
+
+        const created = await request(app.getHttpServer())
+          .post('/api/v1/admin/menu/items')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send(newMenuItemPayload(categoryId, { recommendationItemIds: [c.id, a.id, b.id] }));
+        expect(created.status).toBe(201);
+        expect(created.body.recommendationItemIds).toEqual([c.id, a.id, b.id]);
+
+        const list = await request(app.getHttpServer())
+          .get('/api/v1/admin/menu')
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .query({ categoryId });
+        const found = list.body.find((i: { id: string }) => i.id === created.body.id);
+        expect(found.recommendationItemIds).toEqual([c.id, a.id, b.id]);
+      });
+
+      it('returns [] when no recommendations exist', async () => {
+        const { admin, categoryId } = await setup();
+        const created = await createItem(admin, categoryId);
+        expect(created.recommendationItemIds).toEqual([]);
+      });
+    });
+  });
+
+  // ===========================================================================
   describe('Variants management', () => {
     it('creates, updates in place, removes, and adds variants on PUT', async () => {
       const admin = await registerAdmin();

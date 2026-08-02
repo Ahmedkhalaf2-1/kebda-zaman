@@ -1,4 +1,4 @@
-import { MenuItemBadge, Prisma } from '@prisma/client';
+import { MenuItem, MenuItemBadge, Prisma } from '@prisma/client';
 
 /**
  * Public catalog shape. Field-picked explicitly (never spread) so Prisma's
@@ -113,6 +113,60 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
 }
 
 /**
+ * Focused "Often Ordered With" summary — deliberately excludes variants,
+ * addonGroups, recommendationItemIds, and oftenOrderedWith itself (no
+ * recursive nesting). Public detail endpoint only (plan VO3 Menu §8).
+ */
+export interface MenuItemSummaryResponseDto {
+  id: string;
+  categoryId: string;
+  nameAr: string;
+  nameEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  basePrice: number;
+  compareAtPrice: number | null;
+  calories: number | null;
+  badge: MenuItemBadge | null;
+  imageUrl: string | null;
+  isAvailable: boolean;
+  isPopular: boolean;
+}
+
+export function toMenuItemSummaryResponse(item: MenuItem): MenuItemSummaryResponseDto {
+  return {
+    id: item.id,
+    categoryId: item.categoryId,
+    nameAr: item.nameAr,
+    nameEn: item.nameEn,
+    descriptionAr: item.descriptionAr,
+    descriptionEn: item.descriptionEn,
+    basePrice: item.basePrice.toNumber(),
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
+    calories: item.calories,
+    badge: item.badge,
+    imageUrl: item.imageUrl,
+    isAvailable: item.isAvailable,
+    isPopular: item.isPopular,
+  };
+}
+
+/** GET /menu/items/:id only — list/search/featured stay on MenuItemResponseDto. */
+export interface MenuItemDetailResponseDto extends MenuItemResponseDto {
+  oftenOrderedWith: MenuItemSummaryResponseDto[];
+}
+
+export function toMenuItemDetailResponse(
+  item: MenuItemWithRelations,
+  oftenOrderedWithItems: MenuItem[],
+): MenuItemDetailResponseDto {
+  return {
+    ...toMenuItemResponse(item),
+    oftenOrderedWith: oftenOrderedWithItems.map(toMenuItemSummaryResponse),
+  };
+}
+
+/**
  * Admin view: every variant/addon (active or not — the public
  * PUBLIC_MENU_ITEM_INCLUDE filters those out), plus the isActive/
  * isAvailable/displayOrder fields admin management needs to see and toggle.
@@ -145,6 +199,8 @@ export interface AdminMenuItemResponseDto extends Omit<
   displayOrder: number | null;
   variants: AdminItemVariantResponseDto[];
   addonGroups: AdminAddonGroupResponseDto[];
+  /** Outgoing "Often Ordered With" target IDs only, ordered by displayOrder — never expanded. */
+  recommendationItemIds: string[];
 }
 
 export const ADMIN_MENU_ITEM_INCLUDE = {
@@ -153,9 +209,19 @@ export const ADMIN_MENU_ITEM_INCLUDE = {
     orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     include: { addons: { orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }] } },
   },
+  recommendations: {
+    orderBy: { displayOrder: 'asc' },
+    select: { recommendedMenuItemId: true },
+  },
 } satisfies Prisma.MenuItemInclude;
 
-export type AdminMenuItemWithRelations = MenuItemWithRelations;
+export type AdminMenuItemWithRelations = Prisma.MenuItemGetPayload<{
+  include: {
+    variants: true;
+    addonGroups: { include: { addons: true } };
+    recommendations: { select: { recommendedMenuItemId: true } };
+  };
+}>;
 
 export function toAdminMenuItemResponse(
   item: AdminMenuItemWithRelations,
@@ -175,6 +241,7 @@ export function toAdminMenuItemResponse(
     isPopular: item.isPopular,
     badge: item.badge,
     displayOrder: item.displayOrder,
+    recommendationItemIds: item.recommendations.map((r) => r.recommendedMenuItemId),
     variants: item.variants.map((variant) => ({
       id: variant.id,
       nameAr: variant.nameAr,
