@@ -107,6 +107,10 @@ model User {
   // DSL cannot express `WHERE deletedAt IS NULL AND email IS NOT NULL`).
   email               String?
   passwordHash        String?
+  // External identity linkage for Firebase-authenticated sign-in (Google via
+  // Firebase Auth). Null for accounts that have never signed in with Google.
+  // Nullable + unique so at most one user can ever claim a given Firebase uid.
+  firebaseUid         String?   @unique
   fullName            String
   phone               String?
   avatarUrl           String?

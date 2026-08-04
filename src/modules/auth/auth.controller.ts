@@ -10,6 +10,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { GuestDto } from './dto/guest.dto';
+import { GoogleAuthDto } from './dto/google-auth.dto';
 import { AUTH_THROTTLE } from './auth-throttle.const';
 import { extractRequestMeta } from './request-meta.util';
 
@@ -49,6 +50,17 @@ export class AuthController {
   @Post('admin/login')
   adminLoginAlias(@Body() dto: LoginDto, @Req() req: Request) {
     return this.authService.adminLogin(dto, extractRequestMeta(req));
+  }
+
+  // Login endpoint (not authenticated) — same rate-limit class as /login.
+  // Identity is derived entirely from the verified Firebase ID token; no
+  // client-supplied field can influence the resolved account or its role.
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('google')
+  googleLogin(@Body() dto: GoogleAuthDto, @Req() req: Request) {
+    return this.authService.googleLogin(dto, extractRequestMeta(req));
   }
 
   @Public()

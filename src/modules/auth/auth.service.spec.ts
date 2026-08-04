@@ -1,9 +1,15 @@
 import { Logger, UnauthorizedException } from '@nestjs/common';
+// AuthService statically imports GoogleAuthService, which imports
+// firebase-admin/auth — mocked here so this unit test never pulls in the
+// real Admin SDK (it transitively depends on ESM-only packages Jest can't
+// parse without this).
+jest.mock('firebase-admin/auth', () => ({ getAuth: jest.fn() }));
 import { AuthService } from './auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from './password.service';
 import { TokenService, RequestMeta } from './token.service';
 import { BruteForceService } from './brute-force.service';
+import { GoogleAuthService } from './google-auth.service';
 
 const META: RequestMeta = { ip: '127.0.0.1', userAgent: 'jest' };
 
@@ -35,6 +41,7 @@ describe('AuthService.refresh — device deactivation on rejected session refres
       {} as PasswordService,
       tokenService as unknown as TokenService,
       {} as BruteForceService,
+      {} as GoogleAuthService,
     );
   }
 
