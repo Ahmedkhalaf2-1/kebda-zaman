@@ -7,11 +7,21 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   Min,
   MaxLength,
 } from 'class-validator';
 import { CampaignTargetAudience } from '@prisma/client';
 import { NOTIFICATION_TYPES, NotificationType } from '../notification-payload';
+
+/**
+ * destinationRoute must be an internal, relative app path (matches the shape
+ * every route this backend generates already uses, e.g.
+ * `/orders/tracking/:id`, `/promos`) — never a scheme (`http:`, `https:`,
+ * `javascript:`, `intent:`, ...), which would let a stored deep link open an
+ * arbitrary external URL or trigger a scheme handler on the client (§4).
+ */
+const INTERNAL_ROUTE_PATTERN = /^\/[a-zA-Z0-9\-_/]*$/;
 
 /** plan §4.22: shared shape for immediate send and schedule. */
 export class CampaignDto {
@@ -47,6 +57,10 @@ export class CampaignDto {
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @Matches(INTERNAL_ROUTE_PATTERN, {
+    message:
+      'destinationRoute must be an internal app path starting with "/" (no schemes/protocols)',
+  })
   destinationRoute?: string;
 
   @IsOptional()

@@ -18,9 +18,21 @@ export function createFirebaseAdminApp(config: ConfigService): App | null {
   const projectId = config.get<string>('firebase.projectId');
   const serviceAccountPath = config.get<string>('firebase.serviceAccountPath');
   const serviceAccountJson = config.get<string>('firebase.serviceAccountJson');
+  const isProduction = config.get<string>('nodeEnv') === 'production';
 
   if (!serviceAccountPath && !serviceAccountJson) {
-    logger.warn('No Firebase credentials configured — FCM sending is disabled (safe no-op mode).');
+    const message =
+      'No Firebase credentials configured — FCM sending is disabled (safe no-op mode).';
+    // In production this is a misconfiguration worth paging on, not routine
+    // background noise — logged at 'error' so it surfaces in alerting.
+    // Boot still succeeds (§1): a missing FCM provider must never take the
+    // API down. The safe/unconfigured state is also exposed via
+    // GET /admin/notifications/status (§6) for operators and admin UIs.
+    if (isProduction) {
+      logger.error(`${message} This is unexpected in production.`);
+    } else {
+      logger.warn(message);
+    }
     return null;
   }
 
