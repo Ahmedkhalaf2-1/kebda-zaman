@@ -393,15 +393,29 @@ model Order {
   // Address snapshot at checkout time — decouples the order from later edits/
   // deletes of the customer's saved addresses (Address entity is Phase 2+).
   deliveryAddressJson        Json
-  // Delivery-zone reference (Phase 8) — null for PICKUP orders and for
-  // orders placed before this phase. `deliveryFee` above already holds the
-  // authoritative fee snapshot (the zone's fee at order time, or 0 for
-  // pickup); these two columns snapshot only the zone's bilingual name so
-  // history stays readable if the zone is later renamed/deactivated. Mirrors
-  // the promoCodeSnapshot convention above.
+  // DEPRECATED (superseded by the distance-pricing snapshot columns below) —
+  // always null on orders placed after the distance-pricing migration. Kept,
+  // unused by any active code path, only so orders placed under the old
+  // zone-based system keep reading back correctly. `deliveryFee` above
+  // already holds the authoritative fee snapshot for those old orders (the
+  // zone's fee at order time, or 0 for pickup); these two columns snapshot
+  // only the zone's bilingual name so history stays readable if the zone is
+  // later renamed/deactivated. Mirrors the promoCodeSnapshot convention above.
   deliveryZoneId             String?        @db.Uuid
   deliveryZoneNameArSnapshot String?
   deliveryZoneNameEnSnapshot String?
+  // Distance-based delivery pricing snapshot — set for DELIVERY orders only
+  // (null for PICKUP and for orders placed before this migration).
+  // `deliveryTierId` is a soft reference (plain UUID, no FK — same
+  // convention as OrderItem.menuItemId) so a later admin edit/deactivation
+  // of the tier never changes what an existing order reports; the min/max
+  // snapshot columns are the actual authoritative record of which tier
+  // applied. `deliveryFee` above remains the authoritative fee amount.
+  deliveryDistanceMeters     Int?
+  deliveryDurationSeconds    Int?
+  deliveryTierId             String?        @db.Uuid
+  deliveryTierMinKmSnapshot  Decimal?       @db.Decimal(5, 2)
+  deliveryTierMaxKmSnapshot  Decimal?       @db.Decimal(5, 2)
   estimatedDeliveryTime      DateTime?
   createdAt                  DateTime       @default(now())
   updatedAt                  DateTime       @updatedAt
@@ -541,46 +555,57 @@ model DeviceToken {
 /// restaurant's prior effective hours. `deliveryFee`/`minOrderAmount` remain
 /// the store-wide defaults/floor (still enforced for every order regardless
 /// of fulfillment type); for DELIVERY orders the authoritative per-order fee
-/// and minimum now come from the selected DeliveryZone instead (see Order
-/// below) — these settings fields are no longer read for DELIVERY pricing,
-/// but are kept (not removed) since they still gate PICKUP's store-wide
-/// minimum and remain a reasonable fallback/default.
+/// now comes from distance-based pricing (see DeliveryDistanceTier /
+/// DeliveryPricingService) — `deliveryFee` is no longer read for DELIVERY
+/// pricing, but is kept since it still gates PICKUP's store-wide minimum
+/// and remains a reasonable fallback/default.
+///
+/// `restaurantLatitude`/`restaurantLongitude` (distance-pricing migration):
+/// the single authoritative origin used for every Google Routes distance
+/// calculation — never hardcoded in a service. NOT NULL: checkout for
+/// DELIVERY orders cannot function without a real origin. Decimal(10,7)
+/// (7 fractional digits, not Address's 6) deliberately — the approved
+/// production coordinates (21.5705641 / 39.1681808) carry 7 fractional
+/// digits and must round-trip exactly, not get silently truncated.
 model RestaurantSettings {
-  id                String   @id @default(uuid()) @db.Uuid
-  singleton         Boolean  @unique @default(true)
-  restaurantNameAr  String
-  restaurantNameEn  String
-  logoUrl           String?
-  phone             String
-  addressAr         String
-  addressEn         String
-  taxRatePercent    Decimal  @db.Decimal(10, 2)
-  deliveryFee       Decimal  @db.Decimal(10, 2)
-  minOrderAmount    Decimal  @db.Decimal(10, 2)
-  currency          String
+  id                  String   @id @default(uuid()) @db.Uuid
+  singleton           Boolean  @unique @default(true)
+  restaurantNameAr    String
+  restaurantNameEn    String
+  logoUrl             String?
+  phone               String
+  addressAr           String
+  addressEn           String
+  taxRatePercent      Decimal  @db.Decimal(10, 2)
+  deliveryFee         Decimal  @db.Decimal(10, 2)
+  minOrderAmount      Decimal  @db.Decimal(10, 2)
+  currency            String
   /// 7-entry array: [{ dayOfWeek: 0-6, isOpen: boolean, openTime: "HH:MM"|null, closeTime: "HH:MM"|null }].
   /// Informational/display only — see `acceptingOrders` for the actual
   /// checkout gate; hours do not themselves open/close order acceptance.
-  workingHours      Json
+  workingHours        Json
   /// IANA timezone the working-hours times above are expressed in. Never
   /// inferred from the server's local timezone. Default is this
   /// restaurant's actual location (Jeddah, Saudi Arabia).
-  timezone          String   @default("Asia/Riyadh")
+  timezone            String   @default("Asia/Riyadh")
   /// Manual checkout gate (plan Phase 8). When false, checkout rejects new
   /// orders with RESTAURANT_NOT_ACCEPTING_ORDERS regardless of workingHours —
   /// this project does not auto-derive acceptance from hours.
-  acceptingOrders   Boolean  @default(true)
-  closedMessageAr   String?
-  closedMessageEn   String?
-  isMaintenanceMode Boolean  @default(false)
-  updatedAt         DateTime @updatedAt
+  acceptingOrders     Boolean  @default(true)
+  closedMessageAr     String?
+  closedMessageEn     String?
+  isMaintenanceMode   Boolean  @default(false)
+  restaurantLatitude  Decimal  @db.Decimal(10, 7)
+  restaurantLongitude Decimal  @db.Decimal(10, 7)
+  updatedAt           DateTime @updatedAt
 }
 
-/// ADMIN-managed delivery zone (plan Phase 8) — flat fee + minimum per named
-/// area, no polygons/coordinates/geofencing by design. Soft-deleted like
-/// Category/PromoCode (never hard-deleted), so an Order's deliveryZoneId FK
-/// (onDelete: SetNull) plus its name/fee snapshot on Order stay meaningful
-/// even after a zone is retired.
+/// DEPRECATED — superseded by DeliveryDistanceTier / DeliveryPricingService.
+/// No longer read by any active code path (checkout, pricing, admin APIs are
+/// all gone); the table and its FK from Order are kept only so historical
+/// orders placed before the distance-pricing migration keep reading back
+/// correctly via Order.deliveryZoneId / deliveryZoneName{Ar,En}Snapshot.
+/// Do not add new writers of this model.
 model DeliveryZone {
   id           String    @id @default(uuid()) @db.Uuid
   nameAr       String
@@ -594,6 +619,31 @@ model DeliveryZone {
   deletedAt    DateTime?
 
   orders Order[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// ADMIN-managed distance-based delivery pricing tier — the authoritative
+/// source for a DELIVERY order's fee, keyed by actual driving distance
+/// (Google Routes API `distanceMeters`) from RestaurantSettings' coordinates
+/// to the customer's delivery pin. Interval semantics: `minDistanceKm` is
+/// inclusive; `maxDistanceKm` is exclusive, EXCEPT for the active tier with
+/// the greatest `maxDistanceKm` (the "final" tier), which is inclusive on
+/// its max — see DeliveryPricingService.matchTier, which resolves this off
+/// whole-meter integers (never float km comparisons) to avoid boundary
+/// errors. No soft-delete: tiers are never referenced by FK (Order only
+/// keeps a soft `deliveryTierId` + a min/max snapshot), so `isActive` is
+/// sufficient for admin deactivation.
+model DeliveryDistanceTier {
+  id            String   @id @default(uuid()) @db.Uuid
+  minDistanceKm Decimal  @db.Decimal(5, 2)
+  maxDistanceKm Decimal  @db.Decimal(5, 2)
+  deliveryFee   Decimal  @db.Decimal(10, 2)
+  minimumOrder  Decimal  @db.Decimal(10, 2) @default(0)
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([isActive, sortOrder])
 }

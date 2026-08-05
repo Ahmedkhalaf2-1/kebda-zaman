@@ -6,7 +6,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
-import { DeliveryZonesModule } from '../delivery-zones/delivery-zones.module';
+import { DeliveryPricingModule } from '../delivery-pricing/delivery-pricing.module';
 import { OrdersController } from './orders.controller';
 import { CheckoutController } from './checkout.controller';
 import { AdminOrdersController } from './admin-orders.controller';
@@ -21,7 +21,7 @@ import { OrdersService } from './orders.service';
     PaymentsModule,
     LoyaltyModule,
     AdminNotificationsModule,
-    DeliveryZonesModule,
+    DeliveryPricingModule,
   ],
   controllers: [OrdersController, CheckoutController, AdminOrdersController],
   providers: [OrdersService],

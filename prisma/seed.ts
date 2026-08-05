@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Decimal } from '@prisma/client/runtime/library';
 import { PrismaClient } from '@prisma/client';
-import { PasswordService } from '../src/modules/auth/password.service';
 import { VO3_MENU, type Vo3VariantSeed } from './data/vo3-menu.data';
 
 /**
@@ -14,7 +13,7 @@ import { VO3_MENU, type Vo3VariantSeed } from './data/vo3-menu.data';
  * operational config an admin has edited via the admin API is never
  * clobbered back to defaults by a redeploy.
  *
- * Seeds the RestaurantSettings singleton, the seeded admin accounts, and the
+ * Seeds the RestaurantSettings singleton, the seeded admin account, and the
  * real approved VO3 menu (categories + menu items + variants, from
  * prisma/data/vo3-menu.data.ts). The original Phase-1 development fake
  * catalog is no longer seeded — retireLegacyFakeCatalog() soft-retires
@@ -22,11 +21,15 @@ import { VO3_MENU, type Vo3VariantSeed } from './data/vo3-menu.data';
  *
  * No plaintext passwords or production secrets are seeded: the admin account
  * is created with passwordHash = null. Credential provisioning is a Phase 2
- * (Authentication) concern.
+ * (Authentication) concern — a real operator sets their own password through
+ * the normal auth flow, never through this script. A previous revision of
+ * this file seeded a second, login-capable admin with a hardcoded
+ * email/plaintext password (seedRealAdmin()) — that was a credential leak
+ * risk, not an intended provisioning step, and has been removed. Never
+ * reintroduce a login-capable account here.
  */
 
 export const prisma = new PrismaClient();
-const passwordService = new PasswordService();
 
 /** Deterministic, collision-free UUID derived from a stable seed key. */
 export function id(seedKey: string): string {
@@ -104,6 +107,10 @@ export const RESTAURANT_SETTINGS_DEFAULTS = {
   acceptingOrders: true,
   closedMessageAr: null,
   closedMessageEn: null,
+  // Approved production restaurant location (VO3 distance-based delivery
+  // pricing) — a real coordinate, not a placeholder, unlike the fields above.
+  restaurantLatitude: 21.5705641,
+  restaurantLongitude: 39.1681808,
 };
 
 /**
@@ -152,38 +159,6 @@ async function seedAdmin(): Promise<void> {
       onboardingCompleted: true,
     },
   });
-}
-
-/**
- * Real, login-capable administrator account. Idempotent upsert keyed on
- * email: reruns refresh the hash/role of the existing row instead of
- * duplicating it. Password is hashed with PasswordService (argon2id), the
- * same hasher AuthService uses to verify credentials on login.
- */
-async function seedRealAdmin(): Promise<void> {
-  const email = 'admin12@gmail.com';
-  const passwordHash = await passwordService.hash('Ahmed098');
-
-  const existing = await prisma.user.findFirst({ where: { email } });
-  if (existing) {
-    await prisma.user.update({
-      where: { id: existing.id },
-      data: { passwordHash, role: 'ADMIN', isGuest: false, deletedAt: null },
-    });
-  } else {
-    await prisma.user.create({
-      data: {
-        id: id('user:admin12'),
-        email,
-        passwordHash,
-        fullName: 'Admin',
-        role: 'ADMIN',
-        isGuest: false,
-        locale: 'en',
-        onboardingCompleted: true,
-      },
-    });
-  }
 }
 
 /**
@@ -455,7 +430,6 @@ async function main(): Promise<void> {
 
   await seedRestaurantSettings();
   await seedAdmin();
-  await seedRealAdmin();
 
   const categoryIds = await seedVo3Categories();
   const menuItemIds = await seedVo3MenuItems(categoryIds);
@@ -469,7 +443,7 @@ async function main(): Promise<void> {
     0,
   );
   console.log(
-    `Seed complete: ${VO3_MENU.length} categories, ${itemCount} menu items, ${recommendationCount} recommendations, 1 restaurant settings row, 2 admin users.`,
+    `Seed complete: ${VO3_MENU.length} categories, ${itemCount} menu items, ${recommendationCount} recommendations, 1 restaurant settings row, 1 admin user (no password — provisioned separately).`,
   );
 }
 

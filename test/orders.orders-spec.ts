@@ -7,8 +7,16 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { AuthService } from '../src/modules/auth/auth.service';
+import { GoogleRoutesService } from '../src/modules/delivery-pricing/google-routes.service';
 
 const D = (v: string) => new Prisma.Decimal(v);
+
+/** Distance-based delivery pricing always calls Google Routes server-side —
+ * automated tests must never call the real API, so every DELIVERY checkout
+ * here goes through this mock (5km -> first tier, non-zero fee). */
+const mockGoogleRoutesService = {
+  computeRoute: jest.fn().mockResolvedValue({ distanceMeters: 5_000, durationSeconds: 600 }),
+};
 
 describe('Orders & Checkout (integration)', () => {
   let app: INestApplication;
@@ -19,7 +27,6 @@ describe('Orders & Checkout (integration)', () => {
   let checkoutItem: { id: string };
   let cheapItem: { id: string };
   let optionsItem: { id: string; variantId: string; addonId: string };
-  let deliveryZoneId: string;
 
   const cleanupUserIds: string[] = [];
   const deliveryAddress = {
@@ -28,6 +35,7 @@ describe('Orders & Checkout (integration)', () => {
     building: 'B1',
     city: 'Cairo',
   };
+  const deliveryAddressWithPin = { ...deliveryAddress, latitude: 30.0444, longitude: 31.2357 };
 
   async function registerUser() {
     const registered = await authService.register(
@@ -57,7 +65,10 @@ describe('Orders & Checkout (integration)', () => {
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(GoogleRoutesService)
+      .useValue(mockGoogleRoutesService)
+      .compile();
 
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api');
@@ -155,16 +166,6 @@ describe('Orders & Checkout (integration)', () => {
         { code: 'PHASE5-RACE', discountType: 'FIXED', value: D('5.00'), maxUsage: 1 },
       ],
     });
-
-    const zone = await prisma.deliveryZone.create({
-      data: {
-        nameAr: 'منطقة الاختبار',
-        nameEn: 'Test Zone',
-        deliveryFee: D('15.00'),
-        minimumOrder: D('0.00'),
-      },
-    });
-    deliveryZoneId = zone.id;
   });
 
   afterAll(async () => {
@@ -183,7 +184,6 @@ describe('Orders & Checkout (integration)', () => {
     });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
-    await prisma.deliveryZone.delete({ where: { id: deliveryZoneId } });
     await app.close();
   });
 
@@ -602,7 +602,7 @@ describe('Orders & Checkout (integration)', () => {
       expect(res.body.code).toBe('DELIVERY_ADDRESS_REQUIRED');
     });
 
-    it('snapshots the provided address and charges the delivery fee for DELIVERY', async () => {
+    it('snapshots the provided address and charges the distance-based delivery fee for DELIVERY', async () => {
       const { accessToken } = await registerUser();
       await addToCart(accessToken, { menuItemId: checkoutItem.id });
 
@@ -612,13 +612,16 @@ describe('Orders & Checkout (integration)', () => {
         .send({
           deliveryMethod: 'DELIVERY',
           paymentMethod: 'CASH',
-          deliveryAddress,
-          deliveryZoneId,
+          deliveryAddress: deliveryAddressWithPin,
         });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBeGreaterThan(0);
       expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
-      expect(res.body.deliveryZone).toMatchObject({ id: deliveryZoneId, nameEn: 'Test Zone' });
+      expect(res.body.deliveryTier).toMatchObject({
+        minDistanceKm: '0.00',
+        maxDistanceKm: '15.00',
+      });
+      expect(res.body.deliveryDistanceMeters).toBe(5_000);
       // Order response contract: a DELIVERY checkout must report
       // deliveryMethod: 'DELIVERY' (never fall back to the client default).
       expect(res.body.deliveryMethod).toBe('DELIVERY');
@@ -635,8 +638,7 @@ describe('Orders & Checkout (integration)', () => {
         .send({
           deliveryMethod: 'DELIVERY',
           paymentMethod: 'CASH',
-          deliveryAddress: { ...deliveryAddress, latitude: 30.0444, longitude: 31.2357 },
-          deliveryZoneId,
+          deliveryAddress: deliveryAddressWithPin,
         });
       expect(res.status).toBe(201);
       expect(res.body.deliveryAddress).toMatchObject({
@@ -657,22 +659,16 @@ describe('Orders & Checkout (integration)', () => {
       expect(detail.body.deliveryAddress.longitude).toBe(31.2357);
     });
 
-    it('defaults latitude/longitude to null, never 0,0, when the checkout payload omits them (VO2.3)', async () => {
+    it('rejects a DELIVERY checkout when the payload omits latitude/longitude (distance pricing requires a pin)', async () => {
       const { accessToken } = await registerUser();
       await addToCart(accessToken, { menuItemId: checkoutItem.id });
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({
-          deliveryMethod: 'DELIVERY',
-          paymentMethod: 'CASH',
-          deliveryAddress,
-          deliveryZoneId,
-        });
-      expect(res.status).toBe(201);
-      expect(res.body.deliveryAddress.latitude).toBeNull();
-      expect(res.body.deliveryAddress.longitude).toBeNull();
+        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('DELIVERY_COORDINATES_REQUIRED');
     });
 
     it('rejects an out-of-range latitude/longitude on checkout (VO2.3)', async () => {
@@ -686,21 +682,28 @@ describe('Orders & Checkout (integration)', () => {
           deliveryMethod: 'DELIVERY',
           paymentMethod: 'CASH',
           deliveryAddress: { ...deliveryAddress, latitude: 999, longitude: 31.2357 },
-          deliveryZoneId,
         });
       expect(res.status).toBe(400);
     });
 
-    it('rejects a DELIVERY checkout without a deliveryZoneId', async () => {
+    it('rejects a DELIVERY checkout beyond the deliverable range (OUTSIDE_DELIVERY_RANGE)', async () => {
+      mockGoogleRoutesService.computeRoute.mockResolvedValueOnce({
+        distanceMeters: 30_500,
+        durationSeconds: 2400,
+      });
       const { accessToken } = await registerUser();
       await addToCart(accessToken, { menuItemId: checkoutItem.id });
 
       const res = await request(app.getHttpServer())
         .post('/api/v1/checkout')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress });
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: deliveryAddressWithPin,
+        });
       expect(res.status).toBe(422);
-      expect(res.body.code).toBe('DELIVERY_ZONE_UNAVAILABLE');
+      expect(res.body.code).toBe('OUTSIDE_DELIVERY_RANGE');
     });
 
     it('zeroes the delivery fee and ignores address for PICKUP', async () => {

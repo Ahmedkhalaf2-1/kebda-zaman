@@ -121,4 +121,16 @@ export class UpdateSettingsDto {
   @IsString()
   @MaxLength(500)
   closedMessageEn?: string | null;
+
+  /** Authoritative origin for every Google Routes distance calculation
+   * (distance-based delivery pricing) — never hardcoded in a service. */
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  restaurantLatitude!: number;
+
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  restaurantLongitude!: number;
 }

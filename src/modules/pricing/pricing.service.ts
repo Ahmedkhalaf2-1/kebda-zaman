@@ -4,13 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import {
-  DeliveryMethod,
-  DeliveryZone,
-  Prisma,
-  PromoCode,
-  RestaurantSettings,
-} from '@prisma/client';
+import { DeliveryMethod, Prisma, PromoCode, RestaurantSettings } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   MenuItemWithRelations,
@@ -312,18 +306,20 @@ export class PricingService {
    * view has no deliveryMethod (that's chosen at checkout), so cart responses
    * only surface flat settings.deliveryFee/taxRatePercent (see CartService).
    *
-   * `deliveryZone` (Phase 8): when a DELIVERY order resolves an active
-   * DeliveryZone, its `deliveryFee` is authoritative and overrides
-   * `settings.deliveryFee` — callers that don't pass one (direct unit tests,
-   * or any future non-zone delivery context) keep the prior flat-fee
-   * behavior unchanged.
+   * `deliveryFeeOverride` (distance-pricing migration): for a DELIVERY order,
+   * OrdersService resolves this from the matched DeliveryDistanceTier and it
+   * is authoritative, overriding `settings.deliveryFee` — callers that don't
+   * pass one (direct unit tests, or any future non-distance delivery
+   * context) keep the prior flat-fee fallback behavior unchanged. This
+   * service deliberately knows nothing about DeliveryDistanceTier/Google
+   * Routes — it only ever takes a resolved Decimal.
    */
   async priceCart(
     inputs: CartLineInput[],
     settings: RestaurantSettings,
     deliveryMethod: DeliveryMethod,
     promoCode: string | null | undefined,
-    deliveryZone: DeliveryZone | null | undefined,
+    deliveryFeeOverride: Prisma.Decimal | null | undefined,
     userId: string,
   ): Promise<FullPriceBreakdown> {
     const { lines, subtotal } = await this.priceLines(inputs);
@@ -339,7 +335,7 @@ export class PricingService {
     const deliveryFee =
       deliveryMethod === DeliveryMethod.PICKUP
         ? new Prisma.Decimal(0)
-        : (deliveryZone?.deliveryFee ?? settings.deliveryFee);
+        : (deliveryFeeOverride ?? settings.deliveryFee);
     const { tax, totalAmount } = this.computeTotals(
       subtotal,
       discount,

@@ -20,6 +20,8 @@ export interface PublicSettingsResponseDto {
   closedMessageAr: string | null;
   closedMessageEn: string | null;
   isMaintenanceMode: boolean;
+  restaurantLatitude: number;
+  restaurantLongitude: number;
 }
 
 /** ADMIN-only: adds internal/operational fields not needed by a customer app. */
@@ -46,6 +48,8 @@ function toPublicSettingsResponse(settings: RestaurantSettings): PublicSettingsR
     closedMessageAr: settings.closedMessageAr,
     closedMessageEn: settings.closedMessageEn,
     isMaintenanceMode: settings.isMaintenanceMode,
+    restaurantLatitude: settings.restaurantLatitude.toNumber(),
+    restaurantLongitude: settings.restaurantLongitude.toNumber(),
   };
 }
 
@@ -143,6 +147,8 @@ export class SettingsService {
         acceptingOrders: dto.acceptingOrders,
         closedMessageAr: dto.closedMessageAr ?? null,
         closedMessageEn: dto.closedMessageEn ?? null,
+        restaurantLatitude: dto.restaurantLatitude,
+        restaurantLongitude: dto.restaurantLongitude,
       },
     });
     return toAdminSettingsResponse(updated);

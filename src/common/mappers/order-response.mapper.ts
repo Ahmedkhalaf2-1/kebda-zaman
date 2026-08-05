@@ -142,15 +142,26 @@ export interface OrderLoyaltyRedemptionDto {
   pointsRedeemed: number;
 }
 
-/** Present only for DELIVERY orders that resolved a delivery zone at checkout
- * time (Phase 8) — null for PICKUP and for orders placed before this phase.
- * Built entirely from the order's own snapshot columns, never a live
- * DeliveryZone join — a zone renamed/deactivated after this order shipped
- * must not change what this order reports. */
+/** DEPRECATED — present only for DELIVERY orders placed under the old
+ * zone-based system, before the distance-pricing migration; always null on
+ * every order created since. Kept only so those historical orders keep
+ * reading back correctly. Built entirely from the order's own snapshot
+ * columns, never a live DeliveryZone join. */
 export interface OrderDeliveryZoneDto {
   id: string;
   nameAr: string;
   nameEn: string;
+}
+
+/** Present only for DELIVERY orders placed after the distance-pricing
+ * migration — null for PICKUP and for older zone-based orders. Built
+ * entirely from the order's own snapshot columns, never a live
+ * DeliveryDistanceTier join — a tier edited/deactivated after this order
+ * shipped must not change what this order reports. */
+export interface OrderDeliveryTierDto {
+  id: string;
+  minDistanceKm: string;
+  maxDistanceKm: string;
 }
 
 /** Order's immutable delivery-address snapshot (plan VO2.3). Built entirely
@@ -206,8 +217,17 @@ export interface OrderResponseDto {
   estimatedDeliveryTime: string | null;
   /** `null` when no loyalty reward was redeemed for this order (the normal case) — additive field, safe to ignore. */
   loyaltyRedemption: OrderLoyaltyRedemptionDto | null;
-  /** `null` for PICKUP orders (and any order placed before Phase 8). */
+  /** DEPRECATED — `null` for every order placed after the distance-pricing
+   * migration (and for PICKUP). See OrderDeliveryZoneDto. */
   deliveryZone: OrderDeliveryZoneDto | null;
+  /** `null` for PICKUP orders and for orders placed before the
+   * distance-pricing migration. */
+  deliveryDistanceMeters: number | null;
+  /** Derived from `deliveryDistanceMeters`, 2 decimal places. `null` when that is `null`. */
+  deliveryDistanceKm: string | null;
+  deliveryDurationSeconds: number | null;
+  /** `null` for PICKUP orders and for orders placed before the distance-pricing migration. */
+  deliveryTier: OrderDeliveryTierDto | null;
 }
 
 export type OrderWithRelations = Order & {
@@ -245,6 +265,20 @@ export function toOrderResponse(
           nameEn: order.deliveryZoneNameEnSnapshot ?? '',
         }
       : null,
+    deliveryDistanceMeters: order.deliveryDistanceMeters,
+    deliveryDistanceKm:
+      order.deliveryDistanceMeters !== null
+        ? (order.deliveryDistanceMeters / 1000).toFixed(2)
+        : null,
+    deliveryDurationSeconds: order.deliveryDurationSeconds,
+    deliveryTier:
+      order.deliveryTierId && order.deliveryTierMinKmSnapshot && order.deliveryTierMaxKmSnapshot
+        ? {
+            id: order.deliveryTierId,
+            minDistanceKm: order.deliveryTierMinKmSnapshot.toFixed(2),
+            maxDistanceKm: order.deliveryTierMaxKmSnapshot.toFixed(2),
+          }
+        : null,
   };
 }
 

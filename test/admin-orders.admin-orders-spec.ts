@@ -11,8 +11,13 @@ import { NotificationsService } from '../src/modules/notifications/notifications
 import { PaymentsService } from '../src/modules/payments/payments.service';
 import { LoyaltyService } from '../src/modules/loyalty/loyalty.service';
 import { OrdersService } from '../src/modules/orders/orders.service';
+import { GoogleRoutesService } from '../src/modules/delivery-pricing/google-routes.service';
 
 const D = (v: string) => new Prisma.Decimal(v);
+
+const mockGoogleRoutesService = {
+  computeRoute: jest.fn().mockResolvedValue({ distanceMeters: 5_000, durationSeconds: 600 }),
+};
 
 /**
  * Gates the FIRST of two concurrent calls to `prisma.order.findUnique` until
@@ -59,7 +64,6 @@ describe('Admin Orders (integration)', () => {
 
   let categoryId: string;
   let checkoutItem: { id: string };
-  let deliveryZoneId: string;
   const cleanupUserIds: string[] = [];
 
   async function registerCustomer() {
@@ -126,8 +130,14 @@ describe('Admin Orders (integration)', () => {
         paymentMethod: 'CASH',
         ...(deliveryMethod === 'DELIVERY'
           ? {
-              deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-              deliveryZoneId,
+              deliveryAddress: {
+                title: 'Home',
+                street: 'Main St',
+                building: '1',
+                city: 'Cairo',
+                latitude: 30.0444,
+                longitude: 31.2357,
+              },
             }
           : {}),
       });
@@ -145,6 +155,8 @@ describe('Admin Orders (integration)', () => {
           .fn()
           .mockResolvedValue({ successCount: 0, failureCount: 0, invalidTokens: [] }),
       })
+      .overrideProvider(GoogleRoutesService)
+      .useValue(mockGoogleRoutesService)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -188,16 +200,6 @@ describe('Admin Orders (integration)', () => {
         imageUrl: 'https://example.test/img.png',
       },
     });
-
-    const zone = await prisma.deliveryZone.create({
-      data: {
-        nameAr: 'منطقة إدارة الطلبات',
-        nameEn: 'Admin Orders Zone',
-        deliveryFee: D('10.00'),
-        minimumOrder: D('0.00'),
-      },
-    });
-    deliveryZoneId = zone.id;
   });
 
   afterAll(async () => {
@@ -213,7 +215,6 @@ describe('Admin Orders (integration)', () => {
     await prisma.user.deleteMany({ where: { id: { in: cleanupUserIds } } });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
-    await prisma.deliveryZone.delete({ where: { id: deliveryZoneId } });
     await app.close();
   });
 
@@ -341,7 +342,6 @@ describe('Admin Orders (integration)', () => {
             latitude: 30.0444,
             longitude: 31.2357,
           },
-          deliveryZoneId,
         });
       expect(checkout.status).toBe(201);
 

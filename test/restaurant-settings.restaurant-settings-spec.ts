@@ -8,10 +8,20 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { GoogleRoutesService } from '../src/modules/delivery-pricing/google-routes.service';
 
 const D = (v: string) => new Prisma.Decimal(v);
 
-function weeklyHours(opts: { openTime: string; closeTime: string; isOpen?: boolean } = { openTime: '10:00', closeTime: '02:00' }) {
+const mockGoogleRoutesService = {
+  computeRoute: jest.fn().mockResolvedValue({ distanceMeters: 5_000, durationSeconds: 600 }),
+};
+
+function weeklyHours(
+  opts: { openTime: string; closeTime: string; isOpen?: boolean } = {
+    openTime: '10:00',
+    closeTime: '02:00',
+  },
+) {
   return Array.from({ length: 7 }, (_, dayOfWeek) => ({
     dayOfWeek,
     isOpen: opts.isOpen ?? true,
@@ -20,7 +30,7 @@ function weeklyHours(opts: { openTime: string; closeTime: string; isOpen?: boole
   }));
 }
 
-describe('Restaurant Settings & Delivery Zones (integration)', () => {
+describe('Restaurant Settings & Distance-Based Delivery Pricing (integration)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let authService: AuthService;
@@ -28,7 +38,7 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
   let categoryId: string;
   let checkoutItem: { id: string };
   const cleanupUserIds: string[] = [];
-  const cleanupZoneIds: string[] = [];
+  const cleanupTierIds: string[] = [];
   let originalSettingsPayload: Record<string, unknown>;
 
   async function registerCustomer() {
@@ -54,7 +64,10 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
       {},
     );
     cleanupUserIds.push(registered.user.id);
-    await prisma.user.update({ where: { id: registered.user.id }, data: { role: role as UserRole } });
+    await prisma.user.update({
+      where: { id: registered.user.id },
+      data: { role: role as UserRole },
+    });
     return authService.login(
       { email: registered.user.email as string, password: 'correcthorsebattery' },
       {},
@@ -68,13 +81,22 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
       .send({ menuItemId, quantity });
   }
 
-  async function createZone(admin: string, overrides: Record<string, unknown> = {}) {
+  /** Defaults to a far-away, inactive range so it never collides with the 3
+   * seeded production tiers' 0-30km active coverage — pass isActive: true
+   * with an explicit non-overlapping range for coverage-specific tests. */
+  async function createTier(admin: string, overrides: Record<string, unknown> = {}) {
     const res = await request(app.getHttpServer())
-      .post('/api/v1/admin/delivery-zones')
+      .post('/api/v1/admin/delivery-tiers')
       .set('Authorization', `Bearer ${admin}`)
-      .send({ nameAr: 'منطقة', nameEn: `Zone ${randomUUID().slice(0, 8)}`, deliveryFee: 15, minimumOrder: 0, ...overrides });
+      .send({
+        minDistanceKm: 100,
+        maxDistanceKm: 110,
+        deliveryFee: 15,
+        isActive: false,
+        ...overrides,
+      });
     expect(res.status).toBe(201);
-    cleanupZoneIds.push(res.body.id);
+    cleanupTierIds.push(res.body.id);
     return res.body;
   }
 
@@ -88,6 +110,8 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
           .fn()
           .mockResolvedValue({ successCount: 0, failureCount: 0, invalidTokens: [] }),
       })
+      .overrideProvider(GoogleRoutesService)
+      .useValue(mockGoogleRoutesService)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -117,7 +141,9 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
       },
     });
 
-    const settings = await prisma.restaurantSettings.findFirstOrThrow({ where: { singleton: true } });
+    const settings = await prisma.restaurantSettings.findFirstOrThrow({
+      where: { singleton: true },
+    });
     originalSettingsPayload = {
       restaurantNameAr: settings.restaurantNameAr,
       restaurantNameEn: settings.restaurantNameEn,
@@ -135,6 +161,8 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
       acceptingOrders: settings.acceptingOrders,
       closedMessageAr: settings.closedMessageAr,
       closedMessageEn: settings.closedMessageEn,
+      restaurantLatitude: settings.restaurantLatitude.toNumber(),
+      restaurantLongitude: settings.restaurantLongitude.toNumber(),
     };
   });
 
@@ -154,7 +182,7 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
     await prisma.orderItem.deleteMany({ where: { order: { userId: { in: cleanupUserIds } } } });
     await prisma.order.deleteMany({ where: { userId: { in: cleanupUserIds } } });
     await prisma.user.deleteMany({ where: { id: { in: cleanupUserIds } } });
-    await prisma.deliveryZone.deleteMany({ where: { id: { in: cleanupZoneIds } } });
+    await prisma.deliveryDistanceTier.deleteMany({ where: { id: { in: cleanupTierIds } } });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
     await app.close();
@@ -176,6 +204,8 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
         logoUrl: 'https://example.test/logo.png',
         acceptingOrders: true,
         workingHours: weeklyHours({ openTime: '09:00', closeTime: '23:00' }),
+        restaurantLatitude: 21.6,
+        restaurantLongitude: 39.2,
       };
       const putRes = await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
@@ -184,12 +214,23 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
       expect(putRes.status).toBe(200);
       expect(putRes.body.restaurantNameEn).toBe('Kebda Zaman Updated');
       expect(putRes.body.logoUrl).toBe('https://example.test/logo.png');
+      expect(putRes.body.restaurantLatitude).toBe(21.6);
+      expect(putRes.body.restaurantLongitude).toBe(39.2);
 
       // Restore immediately so later tests in this file see the baseline.
       await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
         .set('Authorization', `Bearer ${admin.accessToken}`)
         .send(originalSettingsPayload);
+    });
+
+    it('rejects an out-of-range restaurant latitude/longitude with 400', async () => {
+      const admin = await registerWithRole('ADMIN');
+      const res = await request(app.getHttpServer())
+        .put('/api/v1/admin/settings')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({ ...originalSettingsPayload, restaurantLatitude: 999, restaurantLongitude: 39.2 });
+      expect(res.status).toBe(400);
     });
 
     it('CASHIER and CUSTOMER cannot modify settings', async () => {
@@ -218,6 +259,8 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
         minOrderAmount: expect.any(Number),
         acceptingOrders: expect.any(Boolean),
         timezone: expect.any(String),
+        restaurantLatitude: expect.any(Number),
+        restaurantLongitude: expect.any(Number),
       });
       expect(res.body.id).toBeUndefined();
       expect(res.body.currency).toBeUndefined();
@@ -226,85 +269,82 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
   });
 
   // ===========================================================================
-  describe('Delivery zone CRUD authorization', () => {
-    it('ADMIN can create/update/delete zones', async () => {
+  describe('Admin delivery-tier CRUD authorization', () => {
+    it('ADMIN can create/update tiers, including activate/deactivate via the same DTO', async () => {
       const admin = await registerWithRole('ADMIN');
-      const zone = await createZone(admin.accessToken);
+      const tier = await createTier(admin.accessToken);
 
       const patch = await request(app.getHttpServer())
-        .patch(`/api/v1/admin/delivery-zones/${zone.id}`)
+        .patch(`/api/v1/admin/delivery-tiers/${tier.id}`)
         .set('Authorization', `Bearer ${admin.accessToken}`)
-        .send({ nameAr: zone.nameAr, nameEn: zone.nameEn, deliveryFee: 20, minimumOrder: 100 });
+        .send({ minDistanceKm: 100, maxDistanceKm: 110, deliveryFee: 20, isActive: false });
       expect(patch.status).toBe(200);
-      expect(patch.body.deliveryFee).toBe(20);
+      expect(patch.body.deliveryFee).toBe('20.00');
+      expect(patch.body.isActive).toBe(false);
 
-      const del = await request(app.getHttpServer())
-        .delete(`/api/v1/admin/delivery-zones/${zone.id}`)
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/admin/delivery-tiers')
         .set('Authorization', `Bearer ${admin.accessToken}`);
-      expect(del.status).toBe(204);
+      expect(list.status).toBe(200);
+      expect(list.body.some((t: { id: string }) => t.id === tier.id)).toBe(true);
     });
 
-    it('CASHIER and CUSTOMER cannot manage zones', async () => {
+    it('CASHIER and CUSTOMER cannot manage tiers', async () => {
       const admin = await registerWithRole('ADMIN');
       const cashier = await registerWithRole('CASHIER');
       const customer = await registerCustomer();
-      const zone = await createZone(admin.accessToken);
+      const tier = await createTier(admin.accessToken);
 
       for (const token of [cashier.accessToken, customer.accessToken]) {
         const createRes = await request(app.getHttpServer())
-          .post('/api/v1/admin/delivery-zones')
+          .post('/api/v1/admin/delivery-tiers')
           .set('Authorization', `Bearer ${token}`)
-          .send({ nameAr: 'x', nameEn: 'x', deliveryFee: 10, minimumOrder: 0 });
+          .send({ minDistanceKm: 200, maxDistanceKm: 210, deliveryFee: 10, isActive: false });
         expect(createRes.status).toBe(403);
 
         const patchRes = await request(app.getHttpServer())
-          .patch(`/api/v1/admin/delivery-zones/${zone.id}`)
+          .patch(`/api/v1/admin/delivery-tiers/${tier.id}`)
           .set('Authorization', `Bearer ${token}`)
-          .send({ nameAr: 'x', nameEn: 'x', deliveryFee: 10, minimumOrder: 0 });
+          .send({ minDistanceKm: 100, maxDistanceKm: 110, deliveryFee: 10, isActive: false });
         expect(patchRes.status).toBe(403);
 
-        const deleteRes = await request(app.getHttpServer())
-          .delete(`/api/v1/admin/delivery-zones/${zone.id}`)
+        const listRes = await request(app.getHttpServer())
+          .get('/api/v1/admin/delivery-tiers')
           .set('Authorization', `Bearer ${token}`);
-        expect(deleteRes.status).toBe(403);
+        expect(listRes.status).toBe(403);
       }
     });
 
-    it('rejects a negative deliveryFee or minimumOrder with 400', async () => {
+    it('rejects a negative deliveryFee or an inverted range with 400/422', async () => {
       const admin = await registerWithRole('ADMIN');
       const negFee = await request(app.getHttpServer())
-        .post('/api/v1/admin/delivery-zones')
+        .post('/api/v1/admin/delivery-tiers')
         .set('Authorization', `Bearer ${admin.accessToken}`)
-        .send({ nameAr: 'x', nameEn: 'x', deliveryFee: -1, minimumOrder: 0 });
+        .send({ minDistanceKm: 100, maxDistanceKm: 110, deliveryFee: -1, isActive: false });
       expect(negFee.status).toBe(400);
 
-      const negMin = await request(app.getHttpServer())
-        .post('/api/v1/admin/delivery-zones')
+      const inverted = await request(app.getHttpServer())
+        .post('/api/v1/admin/delivery-tiers')
         .set('Authorization', `Bearer ${admin.accessToken}`)
-        .send({ nameAr: 'x', nameEn: 'x', deliveryFee: 10, minimumOrder: -1 });
-      expect(negMin.status).toBe(400);
+        .send({ minDistanceKm: 110, maxDistanceKm: 100, deliveryFee: 10, isActive: false });
+      expect(inverted.status).toBe(422);
+      expect(inverted.body.code).toBe('DELIVERY_TIER_INVALID_RANGE');
     });
-  });
 
-  // ===========================================================================
-  describe('Public delivery zones endpoint', () => {
-    it('returns only active zones, sorted by sortOrder then createdAt', async () => {
+    it('rejects an active tier that overlaps the seeded 0-30km coverage', async () => {
       const admin = await registerWithRole('ADMIN');
-      const zoneB = await createZone(admin.accessToken, { nameEn: 'Public B', sortOrder: 2 });
-      const zoneA = await createZone(admin.accessToken, { nameEn: 'Public A', sortOrder: 1 });
-      const inactive = await createZone(admin.accessToken, { nameEn: 'Public Inactive', sortOrder: 0, isActive: false });
-
-      const res = await request(app.getHttpServer()).get('/api/v1/delivery-zones');
-      expect(res.status).toBe(200);
-      const ids = res.body.map((z: { id: string }) => z.id);
-      expect(ids).not.toContain(inactive.id);
-      expect(ids.indexOf(zoneA.id)).toBeLessThan(ids.indexOf(zoneB.id));
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/delivery-tiers')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({ minDistanceKm: 10, maxDistanceKm: 20, deliveryFee: 10, isActive: true });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('DELIVERY_TIER_OVERLAP');
     });
   });
 
   // ===========================================================================
-  describe('Checkout delivery-zone integration', () => {
-    it('rejects DELIVERY checkout without a valid active zone', async () => {
+  describe('Checkout delivery-pricing integration', () => {
+    it('rejects DELIVERY checkout without coordinates (DELIVERY_COORDINATES_REQUIRED)', async () => {
       const customer = await registerCustomer();
       await addToCart(customer.accessToken, checkoutItem.id);
 
@@ -317,13 +357,15 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
           deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
         });
       expect(res.status).toBe(422);
-      expect(res.body.code).toBe('DELIVERY_ZONE_UNAVAILABLE');
+      expect(res.body.code).toBe('DELIVERY_COORDINATES_REQUIRED');
     });
 
-    it('rejects DELIVERY checkout referencing an inactive zone', async () => {
-      const admin = await registerWithRole('ADMIN');
+    it('rejects a destination beyond 30km (OUTSIDE_DELIVERY_RANGE)', async () => {
+      mockGoogleRoutesService.computeRoute.mockResolvedValueOnce({
+        distanceMeters: 30_001,
+        durationSeconds: 2400,
+      });
       const customer = await registerCustomer();
-      const inactiveZone = await createZone(admin.accessToken, { isActive: false });
       await addToCart(customer.accessToken, checkoutItem.id);
 
       const res = await request(app.getHttpServer())
@@ -332,17 +374,21 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
         .send({
           deliveryMethod: 'DELIVERY',
           paymentMethod: 'CASH',
-          deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-          deliveryZoneId: inactiveZone.id,
+          deliveryAddress: {
+            title: 'Home',
+            street: 'Main St',
+            building: '1',
+            city: 'Cairo',
+            latitude: 21.6,
+            longitude: 39.2,
+          },
         });
       expect(res.status).toBe(422);
-      expect(res.body.code).toBe('DELIVERY_ZONE_UNAVAILABLE');
+      expect(res.body.code).toBe('OUTSIDE_DELIVERY_RANGE');
     });
 
     it('ignores a client-supplied deliveryFee entirely (unknown field rejected)', async () => {
-      const admin = await registerWithRole('ADMIN');
       const customer = await registerCustomer();
-      const zone = await createZone(admin.accessToken, { deliveryFee: 33.5 });
       await addToCart(customer.accessToken, checkoutItem.id);
 
       const res = await request(app.getHttpServer())
@@ -351,54 +397,127 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
         .send({
           deliveryMethod: 'DELIVERY',
           paymentMethod: 'CASH',
-          deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-          deliveryZoneId: zone.id,
+          deliveryAddress: {
+            title: 'Home',
+            street: 'Main St',
+            building: '1',
+            city: 'Cairo',
+            latitude: 21.6,
+            longitude: 39.2,
+          },
           deliveryFee: 0.01, // attempted client-supplied price override
         });
       expect(res.status).toBe(400); // forbidNonWhitelisted rejects the extra field outright
     });
 
-    it('uses the selected zone deliveryFee, not the flat settings default', async () => {
-      const admin = await registerWithRole('ADMIN');
-      const customer = await registerCustomer();
-      const zone = await createZone(admin.accessToken, { deliveryFee: 33.5 });
-      await addToCart(customer.accessToken, checkoutItem.id);
-
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/checkout')
-        .set('Authorization', `Bearer ${customer.accessToken}`)
-        .send({
-          deliveryMethod: 'DELIVERY',
-          paymentMethod: 'CASH',
-          deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-          deliveryZoneId: zone.id,
+    // Exact boundary behavior required by VO3: 14999m/24999m/30000m stay in
+    // the lower tier, 15000m/25000m cross into the next, 30001m is rejected.
+    it.each([
+      [0, '10.00', '0.00', '15.00'],
+      [14_999, '10.00', '0.00', '15.00'],
+      [15_000, '15.00', '15.00', '25.00'],
+      [24_999, '15.00', '15.00', '25.00'],
+      [25_000, '25.00', '25.00', '30.00'],
+      [30_000, '25.00', '25.00', '30.00'],
+    ])(
+      'at %i meters, charges %s SAR (tier %s-%s km)',
+      async (distanceMeters, expectedFee, expectedMin, expectedMax) => {
+        mockGoogleRoutesService.computeRoute.mockResolvedValueOnce({
+          distanceMeters,
+          durationSeconds: 600,
         });
-      expect(res.status).toBe(201);
-      expect(res.body.deliveryFee).toBe(33.5);
-      expect(res.body.deliveryZone).toMatchObject({ id: zone.id });
+        const customer = await registerCustomer();
+        await addToCart(customer.accessToken, checkoutItem.id);
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/checkout')
+          .set('Authorization', `Bearer ${customer.accessToken}`)
+          .send({
+            deliveryMethod: 'DELIVERY',
+            paymentMethod: 'CASH',
+            deliveryAddress: {
+              title: 'Home',
+              street: 'Main St',
+              building: '1',
+              city: 'Cairo',
+              latitude: 21.6,
+              longitude: 39.2,
+            },
+          });
+        expect(res.status).toBe(201);
+        expect(res.body.deliveryFee).toBe(Number(expectedFee));
+        expect(res.body.deliveryTier).toMatchObject({
+          minDistanceKm: expectedMin,
+          maxDistanceKm: expectedMax,
+        });
+        expect(res.body.deliveryDistanceMeters).toBe(distanceMeters);
+      },
+    );
+
+    it('enforces a tier-specific minimum order (MINIMUM_ORDER_NOT_MET) when an admin configures one', async () => {
+      const admin = await registerWithRole('ADMIN');
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/admin/delivery-tiers')
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+      const firstTier = list.body.find(
+        (t: { minDistanceKm: string }) => t.minDistanceKm === '0.00',
+      );
+
+      // Temporarily give the first tier a minimum order, then restore it —
+      // the approved production tiers ship with minimumOrder: 0.
+      await request(app.getHttpServer())
+        .patch(`/api/v1/admin/delivery-tiers/${firstTier.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({
+          minDistanceKm: 0,
+          maxDistanceKm: 15,
+          deliveryFee: 10,
+          minimumOrder: 1000,
+          isActive: true,
+        });
+
+      try {
+        mockGoogleRoutesService.computeRoute.mockResolvedValueOnce({
+          distanceMeters: 5_000,
+          durationSeconds: 600,
+        });
+        const customer = await registerCustomer();
+        await addToCart(customer.accessToken, checkoutItem.id);
+
+        const res = await request(app.getHttpServer())
+          .post('/api/v1/checkout')
+          .set('Authorization', `Bearer ${customer.accessToken}`)
+          .send({
+            deliveryMethod: 'DELIVERY',
+            paymentMethod: 'CASH',
+            deliveryAddress: {
+              title: 'Home',
+              street: 'Main St',
+              building: '1',
+              city: 'Cairo',
+              latitude: 21.6,
+              longitude: 39.2,
+            },
+          });
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('MINIMUM_ORDER_NOT_MET');
+        expect(res.body.details?.minimumOrder).toBe(1000);
+      } finally {
+        await request(app.getHttpServer())
+          .patch(`/api/v1/admin/delivery-tiers/${firstTier.id}`)
+          .set('Authorization', `Bearer ${admin.accessToken}`)
+          .send({
+            minDistanceKm: 0,
+            maxDistanceKm: 15,
+            deliveryFee: 10,
+            minimumOrder: 0,
+            isActive: true,
+          });
+      }
     });
 
-    it('enforces the zone minimum order (MINIMUM_ORDER_NOT_MET)', async () => {
-      const admin = await registerWithRole('ADMIN');
-      const customer = await registerCustomer();
-      const zone = await createZone(admin.accessToken, { minimumOrder: 1000 });
-      await addToCart(customer.accessToken, checkoutItem.id);
-
-      const res = await request(app.getHttpServer())
-        .post('/api/v1/checkout')
-        .set('Authorization', `Bearer ${customer.accessToken}`)
-        .send({
-          deliveryMethod: 'DELIVERY',
-          paymentMethod: 'CASH',
-          deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-          deliveryZoneId: zone.id,
-        });
-      expect(res.status).toBe(422);
-      expect(res.body.code).toBe('MINIMUM_ORDER_NOT_MET');
-      expect(res.body.details?.minimumOrder).toBe(1000);
-    });
-
-    it('PICKUP has zero delivery fee, requires no zone, and reports deliveryZone: null', async () => {
+    it('PICKUP has zero delivery fee, never calls Google Routes, and reports deliveryTier: null', async () => {
+      mockGoogleRoutesService.computeRoute.mockClear();
       const customer = await registerCustomer();
       await addToCart(customer.accessToken, checkoutItem.id);
 
@@ -408,7 +527,9 @@ describe('Restaurant Settings & Delivery Zones (integration)', () => {
         .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBe(0);
-      expect(res.body.deliveryZone).toBeNull();
+      expect(res.body.deliveryTier).toBeNull();
+      expect(res.body.deliveryDistanceMeters).toBeNull();
+      expect(mockGoogleRoutesService.computeRoute).not.toHaveBeenCalled();
     });
   });
 

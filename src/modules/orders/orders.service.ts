@@ -7,12 +7,12 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DeliveryMethod, DeliveryZone, OrderStatus, Prisma } from '@prisma/client';
+import { DeliveryMethod, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
-import { DeliveryZonesService } from '../delivery-zones/delivery-zones.service';
+import { DeliveryPricingService } from '../delivery-pricing/delivery-pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
 import {
@@ -32,6 +32,7 @@ import {
   toStatusHistoryEntry,
   FRONTEND_STATUS_TO_ORDER_STATUS,
 } from '../../common/mappers/order-response.mapper';
+import { DeliveryQuoteResult } from '../delivery-pricing/delivery-pricing.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
 import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
@@ -98,7 +99,7 @@ export class OrdersService {
     private readonly cartService: CartService,
     private readonly pricingService: PricingService,
     private readonly settingsService: SettingsService,
-    private readonly deliveryZonesService: DeliveryZonesService,
+    private readonly deliveryPricingService: DeliveryPricingService,
     private readonly notificationsService: NotificationsService,
     private readonly paymentsService: PaymentsService,
     private readonly loyaltyService: LoyaltyService,
@@ -174,19 +175,32 @@ export class OrdersService {
       });
     }
 
-    // Delivery-zone resolution (plan Phase 8): the client only ever sends a
-    // reference (deliveryZoneId) — the actual deliveryFee/minimumOrder always
-    // come from this freshly-read DB row, never from the client. Missing,
-    // unknown, inactive, or soft-deleted zones are all DELIVERY_ZONE_UNAVAILABLE.
-    let deliveryZone: DeliveryZone | null = null;
+    // Distance-based delivery pricing (VO3, replaces DeliveryZone): the
+    // client only ever sends a destination pin — the restaurant origin,
+    // travel mode, actual driving distance, matched tier, and every money
+    // figure always come from a fresh server-side Google Routes call + DB
+    // tier lookup, never from the client. A missing pin or an out-of-range
+    // destination both fail checkout before any pricing/DB writes happen.
+    let deliveryQuote: DeliveryQuoteResult | null = null;
     if (dto.deliveryMethod === 'DELIVERY') {
-      deliveryZone = dto.deliveryZoneId
-        ? await this.deliveryZonesService.findActiveById(dto.deliveryZoneId)
-        : null;
-      if (!deliveryZone) {
+      const latitude = dto.deliveryAddress?.latitude;
+      const longitude = dto.deliveryAddress?.longitude;
+      if (latitude === undefined || longitude === undefined) {
         throw new UnprocessableEntityException({
-          message: 'Selected delivery zone is not available',
-          code: 'DELIVERY_ZONE_UNAVAILABLE',
+          message: 'A delivery pin (latitude/longitude) is required for delivery orders',
+          code: 'DELIVERY_COORDINATES_REQUIRED',
+        });
+      }
+
+      deliveryQuote = await this.deliveryPricingService.getAuthoritativeQuote({
+        latitude,
+        longitude,
+      });
+      if (!deliveryQuote.deliverable || !deliveryQuote.tier) {
+        throw new UnprocessableEntityException({
+          message: 'This delivery address is outside the deliverable range',
+          code: 'OUTSIDE_DELIVERY_RANGE',
+          details: { distanceMeters: deliveryQuote.distanceMeters },
         });
       }
     }
@@ -198,13 +212,13 @@ export class OrdersService {
 
     // Authoritative repricing: re-validates every item/variant/addon and the
     // promo from fresh DB reads. Never trusts anything the client sent
-    // beyond references+quantities+deliveryMethod+promoCode+deliveryZoneId.
+    // beyond references+quantities+deliveryMethod+promoCode+deliveryAddress.
     let breakdown = await this.pricingService.priceCart(
       inputs,
       settings,
       dto.deliveryMethod,
       dto.promoCode ?? null,
-      deliveryZone,
+      deliveryQuote?.tier?.deliveryFee,
       userId,
     );
 
@@ -228,11 +242,21 @@ export class OrdersService {
       );
     }
 
-    if (deliveryZone && breakdown.subtotal.lessThan(deliveryZone.minimumOrder)) {
+    // Tier-specific minimum (only when an admin has explicitly set one above
+    // 0 — the approved business input defines delivery fees only, so every
+    // seeded tier has minimumOrder=0 and this is a no-op in practice;
+    // settings.minOrderAmount below remains the authoritative store-wide
+    // floor for delivery unless/until an admin configures a tier minimum).
+    const tierMinimumOrder = deliveryQuote?.tier?.minimumOrder;
+    if (
+      tierMinimumOrder &&
+      tierMinimumOrder.greaterThan(0) &&
+      breakdown.subtotal.lessThan(tierMinimumOrder)
+    ) {
       throw new UnprocessableEntityException({
-        message: `Minimum order amount of ${deliveryZone.minimumOrder.toString()} not met for this delivery zone`,
+        message: `Minimum order amount of ${tierMinimumOrder.toString()} not met for this delivery tier`,
         code: 'MINIMUM_ORDER_NOT_MET',
-        details: { minimumOrder: deliveryZone.minimumOrder.toNumber() },
+        details: { minimumOrder: tierMinimumOrder.toNumber() },
       });
     }
 
@@ -312,9 +336,14 @@ export class OrdersService {
                 appliedPromoId: breakdown.promo?.id ?? null,
                 promoCodeSnapshot: breakdown.promo?.code ?? null,
                 deliveryAddressJson: addressSnapshot,
-                deliveryZoneId: deliveryZone?.id ?? null,
-                deliveryZoneNameArSnapshot: deliveryZone?.nameAr ?? null,
-                deliveryZoneNameEnSnapshot: deliveryZone?.nameEn ?? null,
+                // deliveryZoneId/deliveryZoneName{Ar,En}Snapshot are deliberately
+                // left unset (null) — deprecated, superseded by the snapshot
+                // columns below (see the Order model's schema.prisma doc comment).
+                deliveryDistanceMeters: deliveryQuote?.distanceMeters ?? null,
+                deliveryDurationSeconds: deliveryQuote?.durationSeconds ?? null,
+                deliveryTierId: deliveryQuote?.tier?.id ?? null,
+                deliveryTierMinKmSnapshot: deliveryQuote?.tier?.minDistanceKm ?? null,
+                deliveryTierMaxKmSnapshot: deliveryQuote?.tier?.maxDistanceKm ?? null,
                 items: {
                   create: breakdown.lines.map((line, index) => ({
                     menuItemId: line.menuItem.id,

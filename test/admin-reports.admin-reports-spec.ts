@@ -8,8 +8,13 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { GoogleRoutesService } from '../src/modules/delivery-pricing/google-routes.service';
 
 const D = (v: string) => new Prisma.Decimal(v);
+
+const mockGoogleRoutesService = {
+  computeRoute: jest.fn().mockResolvedValue({ distanceMeters: 5_000, durationSeconds: 600 }),
+};
 
 describe('Admin Reports (integration)', () => {
   let app: INestApplication;
@@ -19,7 +24,6 @@ describe('Admin Reports (integration)', () => {
   let categoryId: string;
   let itemA: { id: string };
   let itemB: { id: string };
-  let deliveryZoneId: string;
   const cleanupUserIds: string[] = [];
 
   async function registerCustomer() {
@@ -45,7 +49,10 @@ describe('Admin Reports (integration)', () => {
       {},
     );
     cleanupUserIds.push(registered.user.id);
-    await prisma.user.update({ where: { id: registered.user.id }, data: { role: role as UserRole } });
+    await prisma.user.update({
+      where: { id: registered.user.id },
+      data: { role: role as UserRole },
+    });
     return authService.login(
       { email: registered.user.email as string, password: 'correcthorsebattery' },
       {},
@@ -70,8 +77,14 @@ describe('Admin Reports (integration)', () => {
         ...opts,
         ...(opts.deliveryMethod === 'DELIVERY'
           ? {
-              deliveryAddress: { title: 'Home', street: 'Main St', building: '1', city: 'Cairo' },
-              deliveryZoneId,
+              deliveryAddress: {
+                title: 'Home',
+                street: 'Main St',
+                building: '1',
+                city: 'Cairo',
+                latitude: 30.0444,
+                longitude: 31.2357,
+              },
             }
           : {}),
       });
@@ -101,6 +114,8 @@ describe('Admin Reports (integration)', () => {
           .fn()
           .mockResolvedValue({ successCount: 0, failureCount: 0, invalidTokens: [] }),
       })
+      .overrideProvider(GoogleRoutesService)
+      .useValue(mockGoogleRoutesService)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -141,11 +156,6 @@ describe('Admin Reports (integration)', () => {
         basePrice: D('55.00'),
       },
     });
-
-    const zone = await prisma.deliveryZone.create({
-      data: { nameAr: 'منطقة التقارير', nameEn: 'Reports Zone', deliveryFee: D('10.00'), minimumOrder: D('0.00') },
-    });
-    deliveryZoneId = zone.id;
   });
 
   afterAll(async () => {
@@ -161,7 +171,6 @@ describe('Admin Reports (integration)', () => {
     await prisma.user.deleteMany({ where: { id: { in: cleanupUserIds } } });
     await prisma.menuItem.deleteMany({ where: { categoryId } });
     await prisma.category.delete({ where: { id: categoryId } });
-    await prisma.deliveryZone.delete({ where: { id: deliveryZoneId } });
     await app.close();
   });
 

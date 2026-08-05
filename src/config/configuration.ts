@@ -43,6 +43,12 @@ export interface AppConfig {
     // reverse-geocode endpoint (it fails with a controlled 502).
     apiKey?: string;
   };
+  googleRoutes: {
+    // Server-side only — never exposed to Flutter, never logged. Unset
+    // disables distance-based delivery pricing (quote/checkout both fail
+    // with a controlled 502) — see GoogleRoutesService.
+    apiKey?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -79,5 +85,8 @@ export default (): AppConfig => ({
   },
   googleGeocoding: {
     apiKey: process.env.GOOGLE_GEOCODING_API_KEY || undefined,
+  },
+  googleRoutes: {
+    apiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,
   },
 });

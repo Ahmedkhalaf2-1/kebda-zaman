@@ -30,7 +30,7 @@ import { AdminNotificationsModule } from './modules/admin-notifications/admin-no
 import { StaffModule } from './modules/staff/staff.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ReportsModule } from './modules/reports/reports.module';
-import { DeliveryZonesModule } from './modules/delivery-zones/delivery-zones.module';
+import { DeliveryPricingModule } from './modules/delivery-pricing/delivery-pricing.module';
 import { LocationsModule } from './modules/locations/locations.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -136,7 +136,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     StaffModule,
     CustomersModule,
     ReportsModule,
-    DeliveryZonesModule,
+    DeliveryPricingModule,
     LocationsModule,
   ],
   providers: [

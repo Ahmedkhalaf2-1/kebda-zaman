@@ -236,6 +236,8 @@ describe('Phase 1 database constraints (integration)', () => {
             minOrderAmount: new Prisma.Decimal('0'),
             currency: 'EGP',
             workingHours: {},
+            restaurantLatitude: new Prisma.Decimal('21.5705641'),
+            restaurantLongitude: new Prisma.Decimal('39.1681808'),
           },
         }),
       ).rejects.toMatchObject({ code: 'P2002' });

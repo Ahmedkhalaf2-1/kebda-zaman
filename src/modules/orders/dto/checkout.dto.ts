@@ -5,7 +5,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -44,11 +43,13 @@ export class DeliveryAddressDto {
   @MaxLength(100)
   city!: string;
 
-  // Exact pin the customer dropped at checkout (plan VO2.3). Optional — a
-  // customer may check out with only a typed address and no map pin — but
-  // when present it is snapshotted verbatim onto the order (never derived
-  // from the text address, never defaulted to 0,0). IsNumber() already
-  // rejects NaN/Infinity by default.
+  // Exact pin the customer dropped at checkout (plan VO2.3). Optional at the
+  // DTO level (matches DeliveryAddressDto's other optional fields), but
+  // OrdersService.checkout enforces both are present for DELIVERY orders
+  // (DELIVERY_COORDINATES_REQUIRED) — distance-based pricing cannot run
+  // without them. Snapshotted verbatim onto the order (never derived from
+  // the text address, never defaulted to 0,0). IsNumber() already rejects
+  // NaN/Infinity by default.
   @IsOptional()
   @IsNumber()
   @Min(-90)
@@ -77,14 +78,6 @@ export class CheckoutDto {
   @ValidateNested()
   @Type(() => DeliveryAddressDto)
   deliveryAddress?: DeliveryAddressDto;
-
-  // Required when deliveryMethod=DELIVERY (service-level check, same
-  // convention as deliveryAddress above) — the backend resolves the actual
-  // deliveryFee/minimumOrder from this zone; a client-supplied fee is never
-  // trusted. Ignored for PICKUP.
-  @IsOptional()
-  @IsUUID()
-  deliveryZoneId?: string;
 
   // Mutually exclusive with `redeemRewardId` — a checkout may use a promo
   // code OR redeem a loyalty reward, never both. Enforced in

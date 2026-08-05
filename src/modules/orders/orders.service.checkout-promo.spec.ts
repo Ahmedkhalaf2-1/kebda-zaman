@@ -5,7 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
 import { SettingsService } from '../settings/settings.service';
-import { DeliveryZonesService } from '../delivery-zones/delivery-zones.service';
+import { DeliveryPricingService } from '../delivery-pricing/delivery-pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentsService } from '../payments/payments.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
@@ -75,6 +75,11 @@ describe('OrdersService.checkout — in-transaction promo re-validation', () => 
     deliveryZoneId: null,
     deliveryZoneNameArSnapshot: null,
     deliveryZoneNameEnSnapshot: null,
+    deliveryDistanceMeters: null,
+    deliveryDurationSeconds: null,
+    deliveryTierId: null,
+    deliveryTierMinKmSnapshot: null,
+    deliveryTierMaxKmSnapshot: null,
   };
 
   const dto: CheckoutDto = {
@@ -144,7 +149,7 @@ describe('OrdersService.checkout — in-transaction promo re-validation', () => 
       cartService as unknown as CartService,
       pricingService as unknown as PricingService,
       settingsService as unknown as SettingsService,
-      {} as DeliveryZonesService,
+      {} as DeliveryPricingService,
       notificationsService as unknown as NotificationsService,
       {} as PaymentsService,
       {} as LoyaltyService,

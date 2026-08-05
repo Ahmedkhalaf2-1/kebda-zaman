@@ -36,6 +36,12 @@ export const validationSchema = Joi.object({
   UPLOAD_MAX_FILE_SIZE_MB: Joi.number().integer().min(1).max(20).default(5),
   // Optional: reverse geocoding is disabled (controlled 502 on request) when unset.
   GOOGLE_GEOCODING_API_KEY: Joi.string().allow('').optional(),
+  // Optional at boot (local/test never need real Google billing) — but
+  // GoogleRoutesService logs at 'error' in production when this is unset
+  // (see the isProduction check there, mirroring firebase-admin.provider.ts),
+  // and every distance-pricing quote/checkout request fails with a
+  // controlled 502 while unset.
+  GOOGLE_ROUTES_API_KEY: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)
