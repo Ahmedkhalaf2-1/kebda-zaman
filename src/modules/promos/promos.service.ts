@@ -28,7 +28,7 @@ export class PromosService {
   async validate(userId: string, dto: ValidatePromoDto): Promise<ValidatePromoResponseDto> {
     const inputs = await this.cartService.getCartLineInputs(userId);
     const { subtotal } = await this.pricingService.priceLines(inputs);
-    const { promo, discount } = await this.pricingService.evaluatePromo(dto.code, subtotal);
+    const { promo, discount } = await this.pricingService.evaluatePromo(dto.code, subtotal, userId);
 
     return {
       valid: true,
@@ -62,7 +62,10 @@ export class PromosService {
         minOrderAmount: dto.minOrderAmount,
         maxDiscountAmount: dto.maxDiscountAmount,
         maxUsage: dto.maxUsage,
-        perUserLimit: dto.perUserLimit,
+        // A promo with no explicit per-user limit is one-use-per-customer —
+        // stored as 1 rather than left null so PromoCode.perUserLimit always
+        // reflects the effective limit an admin can see/edit.
+        perUserLimit: dto.perUserLimit ?? 1,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
         isActive: dto.isActive ?? true,
@@ -91,7 +94,9 @@ export class PromosService {
         minOrderAmount: dto.minOrderAmount ?? null,
         maxDiscountAmount: dto.maxDiscountAmount ?? null,
         maxUsage: dto.maxUsage ?? null,
-        perUserLimit: dto.perUserLimit ?? null,
+        // Omitted (undefined) keeps the existing value rather than resetting
+        // to the null-defaults-to-1 behavior — only an explicit value changes it.
+        perUserLimit: dto.perUserLimit ?? existing.perUserLimit,
         startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
         expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
         isActive: dto.isActive ?? existing.isActive,

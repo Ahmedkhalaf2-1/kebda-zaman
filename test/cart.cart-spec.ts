@@ -42,6 +42,7 @@ describe('Cart & Pricing (integration)', () => {
   };
 
   let accessToken: string;
+  let userId: string;
   const cleanupUserIds: string[] = [];
 
   beforeAll(async () => {
@@ -241,6 +242,7 @@ describe('Cart & Pricing (integration)', () => {
       {},
     );
     accessToken = registered.accessToken;
+    userId = registered.user.id;
     cleanupUserIds.push(registered.user.id);
   });
 
@@ -370,15 +372,19 @@ describe('Cart & Pricing (integration)', () => {
   // ===========================================================================
   describe('PricingService.evaluatePromo', () => {
     it('computes a PERCENT discount', async () => {
-      const { discount } = await pricingService.evaluatePromo(promoCodes.percent10, D('100.00'));
+      const { discount } = await pricingService.evaluatePromo(
+        promoCodes.percent10,
+        D('100.00'),
+        userId,
+      );
       expect(discount.toString()).toBe('10');
     });
 
     it('computes a FIXED discount, capped at the subtotal', async () => {
-      const full = await pricingService.evaluatePromo(promoCodes.fixed20, D('100.00'));
+      const full = await pricingService.evaluatePromo(promoCodes.fixed20, D('100.00'), userId);
       expect(full.discount.toString()).toBe('20');
 
-      const capped = await pricingService.evaluatePromo(promoCodes.fixed20, D('5.00'));
+      const capped = await pricingService.evaluatePromo(promoCodes.fixed20, D('5.00'), userId);
       expect(capped.discount.toString()).toBe('5'); // min(20, 5)
     });
 
@@ -386,6 +392,7 @@ describe('Cart & Pricing (integration)', () => {
       const { discount } = await pricingService.evaluatePromo(
         promoCodes.percentCapped,
         D('100.00'),
+        userId,
       );
       // 50% of 100 = 50, capped at 20
       expect(discount.toString()).toBe('20');
@@ -393,25 +400,25 @@ describe('Cart & Pricing (integration)', () => {
 
     it('rejects an expired promo', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.expired, D('100.00')),
+        pricingService.evaluatePromo(promoCodes.expired, D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_EXPIRED' } });
     });
 
     it('rejects a promo below its minimum order amount', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.minOrder, D('10.00')),
+        pricingService.evaluatePromo(promoCodes.minOrder, D('10.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_MIN_ORDER' } });
     });
 
     it('rejects an inactive promo', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.inactive, D('100.00')),
+        pricingService.evaluatePromo(promoCodes.inactive, D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_INVALID' } });
     });
 
     it('rejects an unknown promo code', async () => {
       await expect(
-        pricingService.evaluatePromo('THIS-CODE-DOES-NOT-EXIST', D('100.00')),
+        pricingService.evaluatePromo('THIS-CODE-DOES-NOT-EXIST', D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_NOT_FOUND' } });
     });
   });
@@ -426,6 +433,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: roundingItem.id, addonIds: [], quantity: 1 }],
         settings,
         'DELIVERY',
+        undefined,
+        undefined,
+        userId,
       );
       // subtotal 10.10 * 14% = 1.414 -> rounds to 1.41
       expect(result.subtotal.toString()).toBe('10.1');
@@ -440,6 +450,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: simpleItem.id, addonIds: [], quantity: 1 }],
         settings,
         'DELIVERY',
+        undefined,
+        undefined,
+        userId,
       );
       expect(result.deliveryFee.toString()).toBe(settings.deliveryFee.toString());
     });
@@ -452,6 +465,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: simpleItem.id, addonIds: [], quantity: 1 }],
         settings,
         'PICKUP',
+        undefined,
+        undefined,
+        userId,
       );
       expect(result.deliveryFee.toString()).toBe('0');
     });
@@ -465,6 +481,8 @@ describe('Cart & Pricing (integration)', () => {
         settings,
         'DELIVERY',
         promoCodes.percent10,
+        undefined,
+        userId,
       );
       // subtotal 42, discount 4.2, discountedSubtotal 37.8, tax = round(37.8*0.14,2)=5.29, delivery=settings
       const expectedDiscounted = D('42.00').minus('4.2');

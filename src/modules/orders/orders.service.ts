@@ -205,6 +205,7 @@ export class OrdersService {
       dto.deliveryMethod,
       dto.promoCode ?? null,
       deliveryZone,
+      userId,
     );
 
     // Loyalty redemption is evaluated (read-only) against the freshly-priced
@@ -264,132 +265,154 @@ export class OrdersService {
     for (let attempt = 1; attempt <= MAX_ORDER_NUMBER_ATTEMPTS; attempt += 1) {
       const orderNumber = this.generateOrderNumber();
       try {
-        const order = await this.prisma.$transaction(async (tx) => {
-          if (breakdown.promo) {
-            const usageGuard =
-              breakdown.promo.maxUsage === null
-                ? {}
-                : { usageCount: { lt: breakdown.promo.maxUsage } };
-            const incremented = await tx.promoCode.updateMany({
-              where: { id: breakdown.promo.id, deletedAt: null, ...usageGuard },
-              data: { usageCount: { increment: 1 } },
-            });
-            if (incremented.count !== 1) {
-              throw new UnprocessableEntityException({
-                message: 'Promo code has been fully redeemed',
-                code: 'PROMO_INVALID',
+        const order = await this.prisma.$transaction(
+          async (tx) => {
+            if (breakdown.promo) {
+              // Full re-validation against a fresh, transaction-scoped read —
+              // the client may have bypassed cart apply-promo entirely, and
+              // eligibility (per-user limit, maxUsage, active window, ...)
+              // can have changed since the pricing pass above, including via
+              // a second concurrent checkout racing this one.
+              await this.pricingService.evaluatePromo(
+                breakdown.promo.code,
+                breakdown.subtotal,
+                userId,
+                tx,
+              );
+
+              const usageGuard =
+                breakdown.promo.maxUsage === null
+                  ? {}
+                  : { usageCount: { lt: breakdown.promo.maxUsage } };
+              const incremented = await tx.promoCode.updateMany({
+                where: { id: breakdown.promo.id, deletedAt: null, ...usageGuard },
+                data: { usageCount: { increment: 1 } },
               });
+              if (incremented.count !== 1) {
+                throw new UnprocessableEntityException({
+                  message: 'Promo code has been fully redeemed',
+                  code: 'PROMO_INVALID',
+                });
+              }
             }
-          }
 
-          const created = await tx.order.create({
-            data: {
-              orderNumber,
-              userId,
-              status: 'PENDING',
-              subtotal: breakdown.subtotal,
-              deliveryFee: breakdown.deliveryFee,
-              tax: breakdown.tax,
-              discount: breakdown.discount,
-              totalAmount: breakdown.totalAmount,
-              deliveryMethod: dto.deliveryMethod,
-              paymentMethod: dto.paymentMethod,
-              paymentStatus: 'PENDING',
-              appliedPromoId: breakdown.promo?.id ?? null,
-              promoCodeSnapshot: breakdown.promo?.code ?? null,
-              deliveryAddressJson: addressSnapshot,
-              deliveryZoneId: deliveryZone?.id ?? null,
-              deliveryZoneNameArSnapshot: deliveryZone?.nameAr ?? null,
-              deliveryZoneNameEnSnapshot: deliveryZone?.nameEn ?? null,
-              items: {
-                create: breakdown.lines.map((line, index) => ({
-                  menuItemId: line.menuItem.id,
-                  quantity: line.quantity,
-                  unitPrice: line.unitPrice,
-                  lineTotal: line.lineTotal,
-                  nameArSnapshot: line.menuItem.nameAr,
-                  nameEnSnapshot: line.menuItem.nameEn,
-                  imageUrlSnapshot: line.menuItem.imageUrl,
-                  specialInstructions: items[index].specialInstructions,
-                  customizations: {
-                    create: [
-                      ...(line.variant
-                        ? [
-                            {
-                              kind: 'VARIANT' as const,
-                              refId: line.variant.id,
-                              nameArSnapshot: line.variant.nameAr,
-                              nameEnSnapshot: line.variant.nameEn,
-                              priceSnapshot: line.variant.priceDelta,
-                            },
-                          ]
-                        : []),
-                      ...line.addons.map((addon) => ({
-                        kind: 'ADDON' as const,
-                        refId: addon.id,
-                        nameArSnapshot: addon.nameAr,
-                        nameEnSnapshot: addon.nameEn,
-                        priceSnapshot: addon.price,
-                      })),
-                    ],
-                  },
-                })),
+            const created = await tx.order.create({
+              data: {
+                orderNumber,
+                userId,
+                status: 'PENDING',
+                subtotal: breakdown.subtotal,
+                deliveryFee: breakdown.deliveryFee,
+                tax: breakdown.tax,
+                discount: breakdown.discount,
+                totalAmount: breakdown.totalAmount,
+                deliveryMethod: dto.deliveryMethod,
+                paymentMethod: dto.paymentMethod,
+                paymentStatus: 'PENDING',
+                appliedPromoId: breakdown.promo?.id ?? null,
+                promoCodeSnapshot: breakdown.promo?.code ?? null,
+                deliveryAddressJson: addressSnapshot,
+                deliveryZoneId: deliveryZone?.id ?? null,
+                deliveryZoneNameArSnapshot: deliveryZone?.nameAr ?? null,
+                deliveryZoneNameEnSnapshot: deliveryZone?.nameEn ?? null,
+                items: {
+                  create: breakdown.lines.map((line, index) => ({
+                    menuItemId: line.menuItem.id,
+                    quantity: line.quantity,
+                    unitPrice: line.unitPrice,
+                    lineTotal: line.lineTotal,
+                    nameArSnapshot: line.menuItem.nameAr,
+                    nameEnSnapshot: line.menuItem.nameEn,
+                    imageUrlSnapshot: line.menuItem.imageUrl,
+                    specialInstructions: items[index].specialInstructions,
+                    customizations: {
+                      create: [
+                        ...(line.variant
+                          ? [
+                              {
+                                kind: 'VARIANT' as const,
+                                refId: line.variant.id,
+                                nameArSnapshot: line.variant.nameAr,
+                                nameEnSnapshot: line.variant.nameEn,
+                                priceSnapshot: line.variant.priceDelta,
+                              },
+                            ]
+                          : []),
+                        ...line.addons.map((addon) => ({
+                          kind: 'ADDON' as const,
+                          refId: addon.id,
+                          nameArSnapshot: addon.nameAr,
+                          nameEnSnapshot: addon.nameEn,
+                          priceSnapshot: addon.price,
+                        })),
+                      ],
+                    },
+                  })),
+                },
+                // `notes` has no dedicated Order column; recorded on the
+                // creation history entry, the closest fitting existing field.
+                statusHistory: {
+                  create: [
+                    { toStatus: 'PENDING', changedByUserId: userId, note: dto.notes ?? null },
+                  ],
+                },
+                payments: {
+                  create: [
+                    {
+                      method: dto.paymentMethod,
+                      status: 'PENDING',
+                      amount: breakdown.totalAmount,
+                      currency: breakdown.currency,
+                      idempotencyKey: namespacedKey,
+                    },
+                  ],
+                },
               },
-              // `notes` has no dedicated Order column; recorded on the
-              // creation history entry, the closest fitting existing field.
-              statusHistory: {
-                create: [{ toStatus: 'PENDING', changedByUserId: userId, note: dto.notes ?? null }],
-              },
-              payments: {
-                create: [
-                  {
-                    method: dto.paymentMethod,
-                    status: 'PENDING',
-                    amount: breakdown.totalAmount,
-                    currency: breakdown.currency,
-                    idempotencyKey: namespacedKey,
-                  },
-                ],
-              },
-            },
-            include: orderInclude,
-          });
+              include: orderInclude,
+            });
 
-          // Admin Notification Center (Sprint 1): every successfully created
-          // order writes one AdminNotification row, in this same transaction —
-          // never a separate post-commit step, so it can't be silently missed
-          // or left orphaned by a later rollback. The FCM push (Sprint 2) is
-          // deliberately NOT sent here — it's best-effort and must never be
-          // able to roll back the order, so it fires after commit, below.
-          const adminNotification = await this.adminNotificationsService.createForNewOrder(tx, {
-            orderId: created.id,
-            orderNumber: created.orderNumber,
-            customerId: created.userId,
-            customerName: created.user.fullName,
-            totalAmount: created.totalAmount,
-          });
+            // Admin Notification Center (Sprint 1): every successfully created
+            // order writes one AdminNotification row, in this same transaction —
+            // never a separate post-commit step, so it can't be silently missed
+            // or left orphaned by a later rollback. The FCM push (Sprint 2) is
+            // deliberately NOT sent here — it's best-effort and must never be
+            // able to roll back the order, so it fires after commit, below.
+            const adminNotification = await this.adminNotificationsService.createForNewOrder(tx, {
+              orderId: created.id,
+              orderNumber: created.orderNumber,
+              customerId: created.userId,
+              customerName: created.user.fullName,
+              totalAmount: created.totalAmount,
+            });
 
-          // Redeems the loyalty reward — same transaction as order creation,
-          // so a failure anywhere below (or above) rolls this back too. Runs
-          // after order.create specifically so the ledger row can reference
-          // the real order id (LoyaltyService.applyRedemption re-checks the
-          // balance race-safely; it does not just trust `loyaltyEvaluation`).
-          if (loyaltyEvaluation) {
-            await this.loyaltyService.applyRedemption(
-              tx,
-              userId,
-              loyaltyEvaluation.reward,
-              created.id,
-            );
-          }
+            // Redeems the loyalty reward — same transaction as order creation,
+            // so a failure anywhere below (or above) rolls this back too. Runs
+            // after order.create specifically so the ledger row can reference
+            // the real order id (LoyaltyService.applyRedemption re-checks the
+            // balance race-safely; it does not just trust `loyaltyEvaluation`).
+            if (loyaltyEvaluation) {
+              await this.loyaltyService.applyRedemption(
+                tx,
+                userId,
+                loyaltyEvaluation.reward,
+                created.id,
+              );
+            }
 
-          // Cart is cleared only after the order (and any redemption) is
-          // fully created, inside this same transaction — any earlier
-          // failure leaves both the cart and the point balance untouched.
-          await tx.cartItem.deleteMany({ where: { cartId } });
+            // Cart is cleared only after the order (and any redemption) is
+            // fully created, inside this same transaction — any earlier
+            // failure leaves both the cart and the point balance untouched.
+            await tx.cartItem.deleteMany({ where: { cartId } });
 
-          return { created, adminNotificationId: adminNotification.id };
-        });
+            return { created, adminNotificationId: adminNotification.id };
+          },
+          // Serializable: the per-user-limit re-check and the maxUsage-guarded
+          // increment above both depend on reads (Order.count / PromoCode.usageCount)
+          // that must not be allowed to interleave with a concurrent checkout
+          // racing the same promo — Serializable makes Postgres abort one of the
+          // two with a P2034 instead of letting both believe they're eligible.
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
 
         // Best-effort admin push (Sprint 2) — fires only after the order and
         // its AdminNotification row are both durably committed. A Firebase
@@ -417,7 +440,10 @@ export class OrdersService {
           : null;
         return toOrderResponse(order.created, loyaltyRedemption);
       } catch (error) {
-        if (this.isOrderNumberConflict(error) && attempt < MAX_ORDER_NUMBER_ATTEMPTS) {
+        if (
+          (this.isOrderNumberConflict(error) || this.isSerializationFailure(error)) &&
+          attempt < MAX_ORDER_NUMBER_ATTEMPTS
+        ) {
           continue;
         }
         throw error;
@@ -654,5 +680,10 @@ export class OrdersService {
     return Array.isArray(target)
       ? target.includes('orderNumber')
       : String(target).includes('orderNumber');
+  }
+
+  /** Postgres serialization failure under Serializable isolation — safe to retry from scratch. */
+  private isSerializationFailure(error: unknown): boolean {
+    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
   }
 }

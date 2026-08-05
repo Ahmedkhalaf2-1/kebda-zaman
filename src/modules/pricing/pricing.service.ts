@@ -1,5 +1,16 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { DeliveryMethod, DeliveryZone, Prisma, PromoCode, RestaurantSettings } from '@prisma/client';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
+import {
+  DeliveryMethod,
+  DeliveryZone,
+  Prisma,
+  PromoCode,
+  RestaurantSettings,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   MenuItemWithRelations,
@@ -220,8 +231,20 @@ export class PricingService {
     return selected.map((entry) => entry.addon);
   }
 
-  async evaluatePromo(code: string, subtotal: Prisma.Decimal): Promise<PromoEvaluation> {
-    const promo = await this.prisma.promoCode.findFirst({
+  /**
+   * The single choke point for promo eligibility (per-user limit included) —
+   * called from cart apply-promo, POST /promos/validate, the pre-transaction
+   * checkout pricing pass, and again from inside the checkout transaction
+   * (passing `tx`) so a race between two concurrent checkouts is caught by a
+   * fresh, transaction-scoped read rather than the earlier pricing pass.
+   */
+  async evaluatePromo(
+    code: string,
+    subtotal: Prisma.Decimal,
+    userId: string,
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<PromoEvaluation> {
+    const promo = await client.promoCode.findFirst({
       where: { code: code.trim().toUpperCase(), deletedAt: null },
     });
     if (!promo) {
@@ -247,6 +270,22 @@ export class PricingService {
         code: 'PROMO_INVALID',
       });
     }
+
+    // Per-user limit (null defaults to 1 — an unconfigured promo is
+    // one-use-per-customer with no DB backfill needed). Counts every Order
+    // ever created against this user+promo regardless of its later status,
+    // so cancelling an order never restores eligibility.
+    const effectivePerUserLimit = promo.perUserLimit ?? 1;
+    const previousUsageCount = await client.order.count({
+      where: { userId, appliedPromoId: promo.id },
+    });
+    if (previousUsageCount >= effectivePerUserLimit) {
+      throw new ConflictException({
+        message: 'You have already used this promo code',
+        code: 'PROMO_ALREADY_USED',
+      });
+    }
+
     if (promo.minOrderAmount && subtotal.lessThan(promo.minOrderAmount)) {
       throw new UnprocessableEntityException({
         message: `Minimum order amount of ${promo.minOrderAmount.toString()} not met`,
@@ -283,15 +322,16 @@ export class PricingService {
     inputs: CartLineInput[],
     settings: RestaurantSettings,
     deliveryMethod: DeliveryMethod,
-    promoCode?: string | null,
-    deliveryZone?: DeliveryZone | null,
+    promoCode: string | null | undefined,
+    deliveryZone: DeliveryZone | null | undefined,
+    userId: string,
   ): Promise<FullPriceBreakdown> {
     const { lines, subtotal } = await this.priceLines(inputs);
 
     let discount = new Prisma.Decimal(0);
     let promo: PromoCode | null = null;
     if (promoCode) {
-      const evaluation = await this.evaluatePromo(promoCode, subtotal);
+      const evaluation = await this.evaluatePromo(promoCode, subtotal, userId);
       discount = evaluation.discount;
       promo = evaluation.promo;
     }
