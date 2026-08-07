@@ -5,7 +5,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Prisma, User, UserRole } from '@prisma/client';
+import { OrderStatus, Prisma, User, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toUserResponse, UserResponseDto } from '../../common/mappers/user-response.mapper';
 import { PasswordService } from './password.service';
@@ -22,6 +22,34 @@ export interface AuthResult {
   accessToken: string;
   refreshToken: string;
 }
+
+/**
+ * Terminal order statuses — the only ones that never block account deletion.
+ * Mirrors OrdersService's transition maps (orders.service.ts): DELIVERED and
+ * PICKED_UP are the two success completions (one per delivery method) and
+ * CANCELLED is the terminal non-completion; all three have no outgoing
+ * transitions. Every other status (PENDING, CONFIRMED, PREPARING,
+ * OUT_FOR_DELIVERY, READY_FOR_PICKUP) is still "in flight" and blocks deletion.
+ */
+const ORDER_TERMINAL_STATUSES: OrderStatus[] = ['DELIVERED', 'PICKED_UP', 'CANCELLED'];
+
+/**
+ * Replaces a DELIVERY order's address snapshot on account deletion. Only
+ * `deliveryAddressJson` (a plain Json column — no migration needed) holds
+ * personal delivery data on a retained historical order; every other
+ * identifying field lives on User, which is anonymized separately.
+ */
+const REDACTED_DELIVERY_ADDRESS: Prisma.InputJsonValue = {
+  redacted: true,
+  title: null,
+  street: null,
+  building: null,
+  floor: null,
+  apartment: null,
+  city: null,
+  latitude: null,
+  longitude: null,
+};
 
 @Injectable()
 export class AuthService {
@@ -223,5 +251,79 @@ export class AuthService {
 
   async logoutAll(userId: string): Promise<void> {
     await this.tokenService.revokeAllForUser(userId);
+  }
+
+  /**
+   * Self-service account deletion. Blocks on any in-flight order, then
+   * deletes the Firebase identity (if any) BEFORE touching local data —
+   * the safe order: Firebase deletion is idempotent (a retry after a local
+   * failure just re-deletes-or-no-ops there), so retrying always converges.
+   * The reverse order risks the opposite outcome: local data gone but a
+   * live Firebase identity stranded with no local record left to retry
+   * against.
+   *
+   * The User row itself is never hard-deleted — Order.userId is an
+   * onDelete: Restrict FK, so a customer with any order history (the common
+   * case) can never be hard-deleted without breaking that history. Instead
+   * the row is anonymized in place (PII columns cleared, deletedAt set),
+   * which already makes every login path reject it (register/login/refresh
+   * all filter `deletedAt: null`) — this is the same convention
+   * CustomersService.updateStatus uses to deactivate an account.
+   */
+  async deleteAccount(userId: string): Promise<void> {
+    const user = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null } });
+    if (!user) {
+      // Already deleted (or a repeated request racing the first one) —
+      // idempotent success, no signal given back about which case it was.
+      return;
+    }
+
+    const activeOrder = await this.prisma.order.findFirst({
+      where: { userId, status: { notIn: ORDER_TERMINAL_STATUSES } },
+      select: { id: true },
+    });
+    if (activeOrder) {
+      throw new ConflictException({
+        message: 'Your account cannot be deleted while you have an active order.',
+        code: 'ACTIVE_ORDER_EXISTS',
+      });
+    }
+
+    if (user.firebaseUid) {
+      await this.googleAuthService.deleteUser(user.firebaseUid);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Personal records with no retention requirement — deleted outright.
+      // LoyaltyAccount cascades to LoyaltyTransaction (points aren't
+      // financial/accounting history the way Order/Payment are).
+      await tx.address.deleteMany({ where: { userId } });
+      await tx.favorite.deleteMany({ where: { userId } });
+      await tx.loyaltyAccount.deleteMany({ where: { userId } });
+      await tx.deviceToken.deleteMany({ where: { userId } });
+      await tx.refreshToken.deleteMany({ where: { userId } });
+      await tx.cart.deleteMany({ where: { userId } });
+
+      // Historical orders (and their Payments) are retained for business/
+      // accounting history — never deleted — but the one piece of personal
+      // delivery data they carry is scrubbed in place.
+      await tx.order.updateMany({
+        where: { userId, deliveryMethod: 'DELIVERY' },
+        data: { deliveryAddressJson: REDACTED_DELIVERY_ADDRESS },
+      });
+
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          email: null,
+          passwordHash: null,
+          firebaseUid: null,
+          fullName: 'Deleted User',
+          phone: null,
+          avatarUrl: null,
+          deletedAt: new Date(),
+        },
+      });
+    });
   }
 }

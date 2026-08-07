@@ -1,4 +1,4 @@
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { App } from 'firebase-admin/app';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import { GoogleAuthService } from './google-auth.service';
@@ -165,5 +165,60 @@ describe('GoogleAuthService.verify', () => {
         expect(serialized).not.toContain(rawToken);
       }
     }
+  });
+});
+
+describe('GoogleAuthService.deleteUser', () => {
+  let deleteUser: jest.Mock;
+
+  beforeEach(() => {
+    deleteUser = jest.fn();
+    getAuth.mockReturnValue({ deleteUser });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function makeService(firebaseApp: App | null = {} as App): GoogleAuthService {
+    return new GoogleAuthService(firebaseApp);
+  }
+
+  it('calls the Admin SDK with the given uid and resolves', async () => {
+    deleteUser.mockResolvedValue(undefined);
+    const service = makeService();
+
+    await expect(service.deleteUser('firebase-uid-123')).resolves.toBeUndefined();
+    expect(deleteUser).toHaveBeenCalledWith('firebase-uid-123');
+  });
+
+  it('auth/user-not-found is treated as already deleted — resolves without throwing', async () => {
+    deleteUser.mockRejectedValue(
+      Object.assign(new Error('no user record'), { code: 'auth/user-not-found' }),
+    );
+    const service = makeService();
+
+    await expect(service.deleteUser('already-gone')).resolves.toBeUndefined();
+  });
+
+  it('an unexpected Firebase failure is surfaced explicitly, never swallowed', async () => {
+    deleteUser.mockRejectedValue(new Error('internal Firebase error'));
+    const service = makeService();
+
+    await expect(service.deleteUser('firebase-uid-123')).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+    await expect(service.deleteUser('firebase-uid-123')).rejects.toMatchObject({
+      response: { code: 'FIREBASE_DELETE_FAILED' },
+    });
+  });
+
+  it('Firebase Admin not configured: throws explicitly, never calls the SDK', async () => {
+    const service = makeService(null);
+
+    await expect(service.deleteUser('firebase-uid-123')).rejects.toThrow(
+      ServiceUnavailableException,
+    );
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 });

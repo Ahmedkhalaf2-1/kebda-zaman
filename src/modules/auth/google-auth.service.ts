@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { App } from 'firebase-admin/app';
 import { FIREBASE_ADMIN_APP } from '../notifications/firebase-admin.provider';
 
@@ -14,6 +20,11 @@ export interface VerifiedGoogleIdentity {
 const INVALID_TOKEN_RESPONSE = {
   message: 'Invalid Google authentication token',
   code: 'INVALID_GOOGLE_TOKEN',
+};
+
+const FIREBASE_DELETE_FAILED_RESPONSE = {
+  message: 'Failed to delete the linked Firebase account. Please try again.',
+  code: 'FIREBASE_DELETE_FAILED',
 };
 
 /**
@@ -76,5 +87,47 @@ export class GoogleAuthService {
       picture: typeof decoded.picture === 'string' ? decoded.picture : undefined,
       signInProvider,
     };
+  }
+
+  /**
+   * Deletes the Firebase Auth user backing a linked account (account
+   * deletion flow, called BEFORE the local DB cleanup — see
+   * AuthService.deleteAccount for why that order is the safe one).
+   * Firebase's own "already gone" response is treated as success (deleting
+   * is naturally idempotent), so a retried deletion request never fails on
+   * this step. Any other failure is surfaced explicitly, never swallowed —
+   * silently reporting success while a live Firebase identity (email, name,
+   * photo) survives would defeat the point of deleting the account.
+   */
+  async deleteUser(uid: string): Promise<void> {
+    if (!this.firebaseApp) {
+      this.logger.error(
+        'Account deletion requires removing a linked Firebase user, but Firebase Admin is not configured.',
+      );
+      throw new ServiceUnavailableException(FIREBASE_DELETE_FAILED_RESPONSE);
+    }
+
+    try {
+      // Lazily imported for the same reason as verify() above.
+      const { getAuth } = await import('firebase-admin/auth');
+      await getAuth(this.firebaseApp).deleteUser(uid);
+    } catch (error) {
+      if (this.isUserNotFound(error)) {
+        return;
+      }
+      // Never log the uid alongside anything token-like — only the SDK's
+      // own error message, same convention as verify() above.
+      this.logger.error(`Firebase user deletion failed: ${(error as Error).message}`);
+      throw new ServiceUnavailableException(FIREBASE_DELETE_FAILED_RESPONSE);
+    }
+  }
+
+  private isUserNotFound(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code: unknown }).code === 'auth/user-not-found'
+    );
   }
 }
