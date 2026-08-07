@@ -1,0 +1,43 @@
+# Kebda Zaman legal site — Caddy v2 configuration reference (DOCUMENTATION ONLY)
+#
+# This file is NOT wired into any running Caddy instance and does NOT modify
+# /etc/caddy/Caddyfile. It exists purely to document the intended production
+# configuration for whoever deploys this site later. Copy the block below into
+# the real Caddyfile on the VPS as a deliberate, reviewed deployment step —
+# do not apply it automatically.
+#
+# Assumptions:
+#   - Static files are deployed to: /opt/kebda-zaman/legal-site
+#   - The host serving this block is: legal.kebdazaman.cloud
+#   - Clean routes /privacy, /terms, /delete-account map to the matching
+#     .html files so the required public URLs work without a .html suffix:
+#       https://legal.kebdazaman.cloud/privacy
+#       https://legal.kebdazaman.cloud/terms
+#       https://legal.kebdazaman.cloud/delete-account
+
+legal.kebdazaman.cloud {
+	root * /opt/kebda-zaman/legal-site
+	encode zstd gzip
+
+	@privacy path /privacy
+	rewrite @privacy /privacy.html
+
+	@terms path /terms
+	rewrite @terms /terms.html
+
+	@deleteAccount path /delete-account
+	rewrite @deleteAccount /delete-account.html
+
+	file_server
+}
+
+# Notes for the person who deploys this later:
+#   1. Sync the legal-site/ directory to /opt/kebda-zaman/legal-site on the VPS
+#      (e.g. rsync or a deploy step in CI) after this branch is reviewed and merged.
+#   2. Add the block above to /etc/caddy/Caddyfile (or an imported site file),
+#      then run `caddy reload` (or `caddy validate` first) to apply it.
+#   3. This static site has no database or API dependency, so it does not need
+#      to be proxied to the NestJS backend and does not need environment
+#      variables or secrets.
+#   4. DNS for legal.kebdazaman.cloud must point at the server before Caddy
+#      can obtain a TLS certificate for it automatically.

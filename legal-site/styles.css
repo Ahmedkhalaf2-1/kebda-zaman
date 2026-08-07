@@ -1,0 +1,422 @@
+/* Kebda Zaman Legal Site — shared styles
+   Palette sourced from the Kebda Zaman product design system
+   (primary terracotta, warm neutral surfaces). No gradients, no drop shadows
+   beyond a single subtle card border, no animation beyond simple transitions. */
+
+:root {
+  --color-primary: #ab3500;
+  --color-primary-container: #ff6b35;
+  --color-primary-fixed: #ffdbd0;
+  --color-on-primary: #ffffff;
+  --color-surface: #fcf9f5;
+  --color-surface-container: #efeeea;
+  --color-surface-container-low: #f4f4f0;
+  --color-surface-container-high: #e9e8e4;
+  --color-on-surface: #1b1c1a;
+  --color-on-surface-variant: #594139;
+  --color-secondary: #5f5e5f;
+  --color-outline-variant: #e1bfb5;
+  --color-outline: #8d7168;
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-success: #006e1c;
+  --color-success-container: #b3f0b2;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Tahoma,
+    "Geeza Pro", Arial, sans-serif;
+  --max-content-width: 46rem;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.65;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+img {
+  max-width: 100%;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Language toggling: html[lang] controls which blocks are visible */
+html[lang="en"] [data-lang="ar"] {
+  display: none;
+}
+
+html[lang="ar"] [data-lang="en"] {
+  display: none;
+}
+
+/* ---------- Header ---------- */
+
+.site-header {
+  border-block-end: 1px solid var(--color-outline-variant);
+  background: var(--color-surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-inner {
+  max-width: 64rem;
+  margin-inline: auto;
+  padding: 0.9rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--color-on-surface);
+  text-decoration: none;
+  letter-spacing: 0.01em;
+  margin-inline-end: auto;
+}
+
+.brand:hover {
+  color: var(--color-primary);
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+}
+
+.site-nav a {
+  color: var(--color-on-surface-variant);
+  text-decoration: none;
+  font-size: 0.95rem;
+  padding: 0.35rem 0.1rem;
+  border-block-end: 2px solid transparent;
+}
+
+.site-nav a:hover,
+.site-nav a[aria-current="page"] {
+  color: var(--color-primary);
+  border-block-end-color: var(--color-primary);
+}
+
+.lang-switch {
+  display: flex;
+  gap: 0.4rem;
+  margin-inline-start: auto;
+}
+
+.lang-switch button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: var(--color-surface-container);
+  color: var(--color-on-surface-variant);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.lang-switch button:hover {
+  background: var(--color-primary-fixed);
+  color: var(--color-primary);
+}
+
+.lang-switch button[aria-pressed="true"] {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-color: var(--color-primary);
+}
+
+/* ---------- Layout ---------- */
+
+main {
+  flex: 1;
+  width: 100%;
+}
+
+.container {
+  max-width: var(--max-content-width);
+  margin-inline: auto;
+  padding: 2.25rem 1.25rem 3rem;
+}
+
+.container--wide {
+  max-width: 64rem;
+}
+
+/* ---------- Typography ---------- */
+
+h1 {
+  font-size: 1.85rem;
+  line-height: 1.25;
+  margin: 0 0 0.4rem;
+}
+
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+  margin: 2.25rem 0 0.75rem;
+  padding-block-start: 0.25rem;
+  border-block-start: 1px solid var(--color-outline-variant);
+}
+
+section:first-of-type h2:first-child,
+h1 + h2 {
+  border-block-start: none;
+  padding-block-start: 0;
+}
+
+h3 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.5rem;
+}
+
+p {
+  margin: 0 0 1rem;
+  max-width: 68ch;
+}
+
+ul,
+ol {
+  margin: 0 0 1rem;
+  padding-inline-start: 1.4rem;
+}
+
+li {
+  margin-block-end: 0.4rem;
+}
+
+.meta {
+  color: var(--color-on-surface-variant);
+  font-size: 0.9rem;
+  margin-block-end: 1.75rem;
+}
+
+.lede {
+  color: var(--color-on-surface-variant);
+  font-size: 1.05rem;
+  max-width: 68ch;
+}
+
+/* ---------- Cards (index page) ---------- */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1rem;
+  margin-block: 2rem;
+}
+
+.card {
+  display: block;
+  background: var(--color-surface-container-low);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.35rem;
+  text-decoration: none;
+  color: var(--color-on-surface);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.card:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-fixed);
+}
+
+.card h2 {
+  margin: 0 0 0.35rem;
+  border: none;
+  padding: 0;
+  font-size: 1.1rem;
+  color: var(--color-primary);
+}
+
+.card p {
+  margin: 0;
+  color: var(--color-on-surface-variant);
+  font-size: 0.92rem;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 999px;
+  padding: 0.75rem 1.5rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.btn-primary:hover {
+  background: #8f2c00;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--color-primary-fixed);
+}
+
+/* ---------- Callouts ---------- */
+
+.callout {
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-surface-container-low);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.25rem;
+  margin-block: 1.25rem;
+}
+
+.callout--warning {
+  border-color: var(--color-error);
+  background: var(--color-error-container);
+  color: var(--color-on-surface);
+}
+
+.callout--success {
+  border-color: var(--color-success);
+  background: var(--color-success-container);
+  color: var(--color-on-surface);
+}
+
+.callout h3 {
+  margin-top: 0;
+}
+
+.callout ul {
+  margin-bottom: 0;
+}
+
+/* ---------- Deletion methods ---------- */
+
+.method {
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius);
+  padding: 1.35rem 1.5rem;
+  margin-block-end: 1.5rem;
+  background: var(--color-surface);
+}
+
+.method h2 {
+  border: none;
+  padding: 0;
+  margin: 0 0 0.9rem;
+  color: var(--color-primary);
+}
+
+.email-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  background: var(--color-surface-container-low);
+  border: 1px dashed var(--color-outline);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.98rem;
+  user-select: all;
+}
+
+.copy-btn {
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface-variant);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  background: var(--color-primary-fixed);
+  color: var(--color-primary);
+}
+
+/* ---------- Footer ---------- */
+
+.site-footer {
+  border-block-start: 1px solid var(--color-outline-variant);
+  padding: 1.75rem 1.25rem;
+  color: var(--color-on-surface-variant);
+  font-size: 0.88rem;
+}
+
+.footer-inner {
+  max-width: 64rem;
+  margin-inline: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+}
+
+.footer-inner a {
+  color: var(--color-on-surface-variant);
+}
+
+/* ---------- Responsive ---------- */
+
+@media (min-width: 640px) {
+  h1 {
+    font-size: 2.1rem;
+  }
+
+  .container {
+    padding-top: 3rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .lang-switch {
+    margin-inline-start: 0;
+  }
+}
