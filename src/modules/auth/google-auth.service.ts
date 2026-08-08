@@ -8,7 +8,7 @@ import {
 import type { App } from 'firebase-admin/app';
 import { FIREBASE_ADMIN_APP } from '../notifications/firebase-admin.provider';
 
-export interface VerifiedGoogleIdentity {
+export interface VerifiedFirebaseIdentity {
   uid: string;
   /** Always present and lower-cased — verification rejects a token without one. */
   email: string;
@@ -17,9 +17,18 @@ export interface VerifiedGoogleIdentity {
   signInProvider?: string;
 }
 
+// Kept as an alias so the existing Google-specific tests and imports remain
+// source-compatible while Apple Sign-In uses the same verified identity shape.
+export type VerifiedGoogleIdentity = VerifiedFirebaseIdentity;
+
 const INVALID_TOKEN_RESPONSE = {
   message: 'Invalid Google authentication token',
   code: 'INVALID_GOOGLE_TOKEN',
+};
+
+const INVALID_APPLE_TOKEN_RESPONSE = {
+  message: 'Invalid Apple authentication token',
+  code: 'INVALID_APPLE_TOKEN',
 };
 
 const FIREBASE_DELETE_FAILED_RESPONSE = {
@@ -41,11 +50,24 @@ export class GoogleAuthService {
   constructor(@Inject(FIREBASE_ADMIN_APP) private readonly firebaseApp: App | null) {}
 
   async verify(firebaseIdToken: string): Promise<VerifiedGoogleIdentity> {
+    return this.verifyProvider(firebaseIdToken, 'google.com', INVALID_TOKEN_RESPONSE, 'Google');
+  }
+
+  async verifyApple(firebaseIdToken: string): Promise<VerifiedFirebaseIdentity> {
+    return this.verifyProvider(firebaseIdToken, 'apple.com', INVALID_APPLE_TOKEN_RESPONSE, 'Apple');
+  }
+
+  private async verifyProvider(
+    firebaseIdToken: string,
+    expectedProvider: 'google.com' | 'apple.com',
+    invalidResponse: { message: string; code: string },
+    providerLabel: 'Google' | 'Apple',
+  ): Promise<VerifiedFirebaseIdentity> {
     if (!this.firebaseApp) {
       this.logger.error(
-        'Google sign-in attempted but Firebase Admin is not configured — rejecting.',
+        `${providerLabel} sign-in attempted but Firebase Admin is not configured — rejecting.`,
       );
-      throw new UnauthorizedException(INVALID_TOKEN_RESPONSE);
+      throw new UnauthorizedException(invalidResponse);
     }
 
     let decoded;
@@ -61,23 +83,25 @@ export class GoogleAuthService {
       decoded = await getAuth(this.firebaseApp).verifyIdToken(firebaseIdToken);
     } catch (error) {
       // Never log the token itself — only the SDK's own error message.
-      this.logger.warn(`Google ID token verification failed: ${(error as Error).message}`);
-      throw new UnauthorizedException(INVALID_TOKEN_RESPONSE);
+      this.logger.warn(
+        `${providerLabel} ID token verification failed: ${(error as Error).message}`,
+      );
+      throw new UnauthorizedException(invalidResponse);
     }
 
     const email = decoded.email?.trim().toLowerCase();
     if (!email) {
-      throw new UnauthorizedException(INVALID_TOKEN_RESPONSE);
+      throw new UnauthorizedException(invalidResponse);
     }
     if (decoded.email_verified !== true) {
-      throw new UnauthorizedException(INVALID_TOKEN_RESPONSE);
+      throw new UnauthorizedException(invalidResponse);
     }
     // This endpoint is Google Sign-In only — a valid Firebase ID token minted
     // via password auth, anonymous auth, or any other provider must not be
     // accepted here even though it passes signature verification above.
     const signInProvider = decoded.firebase?.sign_in_provider;
-    if (signInProvider !== 'google.com') {
-      throw new UnauthorizedException(INVALID_TOKEN_RESPONSE);
+    if (signInProvider !== expectedProvider) {
+      throw new UnauthorizedException(invalidResponse);
     }
 
     return {

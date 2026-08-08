@@ -21,6 +21,7 @@ import { RefreshDto } from './dto/refresh.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { GuestDto } from './dto/guest.dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
+import { AppleAuthDto } from './dto/apple-auth.dto';
 import { AUTH_THROTTLE } from './auth-throttle.const';
 import { extractRequestMeta } from './request-meta.util';
 
@@ -74,14 +75,18 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('apple')
+  appleLogin(@Body() dto: AppleAuthDto, @Req() req: Request) {
+    return this.authService.appleLogin(dto, extractRequestMeta(req));
+  }
+
+  @Public()
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
   refresh(@Body() dto: RefreshDto, @Req() req: Request) {
-    return this.authService.refresh(
-      dto.refreshToken,
-      extractRequestMeta(req),
-      dto.deviceToken,
-    );
+    return this.authService.refresh(dto.refreshToken, extractRequestMeta(req), dto.deviceToken);
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)

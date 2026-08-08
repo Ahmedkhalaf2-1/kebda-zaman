@@ -1,13 +1,13 @@
 import { Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import type { App } from 'firebase-admin/app';
-import type { DecodedIdToken } from 'firebase-admin/auth';
+import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import { GoogleAuthService } from './google-auth.service';
 
 jest.mock('firebase-admin/auth', () => ({
   getAuth: jest.fn(),
 }));
 
-const { getAuth } = require('firebase-admin/auth') as { getAuth: jest.Mock };
+const mockedGetAuth = jest.mocked(getAuth);
 
 function decodedToken(overrides: Partial<DecodedIdToken> = {}): DecodedIdToken {
   return {
@@ -32,7 +32,7 @@ describe('GoogleAuthService.verify', () => {
 
   beforeEach(() => {
     verifyIdToken = jest.fn();
-    getAuth.mockReturnValue({ verifyIdToken });
+    mockedGetAuth.mockReturnValue({ verifyIdToken } as unknown as ReturnType<typeof getAuth>);
   });
 
   afterEach(() => {
@@ -113,6 +113,27 @@ describe('GoogleAuthService.verify', () => {
     expect(identity.signInProvider).toBe('google.com');
   });
 
+  it('verifyApple accepts only an apple.com Firebase provider token', async () => {
+    verifyIdToken.mockResolvedValue(
+      decodedToken({ firebase: { sign_in_provider: 'apple.com', identities: {} } }),
+    );
+    const service = makeService();
+
+    const identity = await service.verifyApple('apple-token');
+
+    expect(identity.signInProvider).toBe('apple.com');
+    expect(identity.email).toBe('customer@example.com');
+  });
+
+  it('verifyApple rejects a Google token with the Apple-specific error code', async () => {
+    verifyIdToken.mockResolvedValue(decodedToken());
+    const service = makeService();
+
+    await expect(service.verifyApple('google-token')).rejects.toMatchObject({
+      response: { code: 'INVALID_APPLE_TOKEN', message: 'Invalid Apple authentication token' },
+    });
+  });
+
   it('sign_in_provider "password": rejected with generic 401', async () => {
     verifyIdToken.mockResolvedValue(
       decodedToken({ firebase: { sign_in_provider: 'password', identities: {} } }),
@@ -173,7 +194,7 @@ describe('GoogleAuthService.deleteUser', () => {
 
   beforeEach(() => {
     deleteUser = jest.fn();
-    getAuth.mockReturnValue({ deleteUser });
+    mockedGetAuth.mockReturnValue({ deleteUser } as unknown as ReturnType<typeof getAuth>);
   });
 
   afterEach(() => {

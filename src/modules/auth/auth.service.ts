@@ -11,11 +11,12 @@ import { toUserResponse, UserResponseDto } from '../../common/mappers/user-respo
 import { PasswordService } from './password.service';
 import { TokenService, RequestMeta } from './token.service';
 import { BruteForceService } from './brute-force.service';
-import { GoogleAuthService, VerifiedGoogleIdentity } from './google-auth.service';
+import { GoogleAuthService, VerifiedFirebaseIdentity } from './google-auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { GuestDto } from './dto/guest.dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
+import { AppleAuthDto } from './dto/apple-auth.dto';
 
 export interface AuthResult {
   user: UserResponseDto;
@@ -106,7 +107,14 @@ export class AuthService {
    */
   async googleLogin(dto: GoogleAuthDto, meta: RequestMeta): Promise<AuthResult> {
     const identity = await this.googleAuthService.verify(dto.firebaseIdToken);
-    const user = await this.resolveGoogleUser(identity);
+    const user = await this.resolveFederatedUser(identity);
+    const tokens = await this.tokenService.issueTokenPair(user, meta);
+    return { user: toUserResponse(user), ...tokens };
+  }
+
+  async appleLogin(dto: AppleAuthDto, meta: RequestMeta): Promise<AuthResult> {
+    const identity = await this.googleAuthService.verifyApple(dto.firebaseIdToken);
+    const user = await this.resolveFederatedUser(identity);
     const tokens = await this.tokenService.issueTokenPair(user, meta);
     return { user: toUserResponse(user), ...tokens };
   }
@@ -117,7 +125,7 @@ export class AuthService {
    * Deleted accounts are invisible here, exactly like normal login/register —
    * this schema has no separate suspended/disabled flag, only `deletedAt`.
    */
-  private async resolveGoogleUser(identity: VerifiedGoogleIdentity): Promise<User> {
+  private async resolveFederatedUser(identity: VerifiedFirebaseIdentity): Promise<User> {
     const byUid = await this.prisma.user.findFirst({
       where: { firebaseUid: identity.uid, deletedAt: null },
     });
@@ -235,7 +243,7 @@ export class AuthService {
             where: { token: deviceToken, isActive: true },
             data: { isActive: false },
           });
-        } catch (cleanupError) {
+        } catch {
           this.logger.warn('Failed to deactivate device token after rejected refresh');
         }
       }
