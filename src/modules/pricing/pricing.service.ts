@@ -63,6 +63,34 @@ function round2(value: Prisma.Decimal): Prisma.Decimal {
 }
 
 /**
+ * The single authoritative "what does this item actually cost" reader — every
+ * financial computation (cart line pricing, checkout, order snapshots) must
+ * go through this rather than reading `menuItem.basePrice` directly, so a
+ * discount can never be duplicated or missed in some other code path.
+ *
+ * `salePrice` overrides `basePrice` only when it is currently valid (> 0 and
+ * strictly less than basePrice) — re-checked here, not just trusted from the
+ * DB, even though CatalogService already enforces this at write time: if a
+ * row is ever in an inconsistent state (e.g. a future data migration bug),
+ * this fails safe by falling back to basePrice rather than risking an
+ * under/overcharge. `basePrice` itself is never touched by a discount — this
+ * is a pure read, applied on top of the item, before any variant/addon delta.
+ */
+export function resolveMenuItemPrice(menuItem: {
+  basePrice: Prisma.Decimal;
+  salePrice: Prisma.Decimal | null;
+}): Prisma.Decimal {
+  if (
+    menuItem.salePrice !== null &&
+    menuItem.salePrice.greaterThan(0) &&
+    menuItem.salePrice.lessThan(menuItem.basePrice)
+  ) {
+    return menuItem.salePrice;
+  }
+  return menuItem.basePrice;
+}
+
+/**
  * Authoritative server-side pricing (plan §6). The client may only ever send
  * references (menuItemId/variantId/addonIds) and a quantity — every money
  * figure here is derived fresh from the database on every call. No method on
@@ -157,7 +185,7 @@ export class PricingService {
     const addons = this.resolveAddons(menuItem, input.addonIds ?? []);
 
     const unitPrice = round2(
-      menuItem.basePrice
+      resolveMenuItemPrice(menuItem)
         .plus(variant?.priceDelta ?? 0)
         .plus(addons.reduce((sum, addon) => sum.plus(addon.price), new Prisma.Decimal(0))),
     );

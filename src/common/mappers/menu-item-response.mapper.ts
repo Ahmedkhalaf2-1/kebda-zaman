@@ -39,6 +39,10 @@ export interface MenuItemResponseDto {
   descriptionAr: string;
   descriptionEn: string;
   basePrice: number;
+  // The actual charged price when set (PricingService.resolveMenuItemPrice) —
+  // null means no discount, basePrice is charged as-is. Distinct from
+  // compareAtPrice (cosmetic "was" price, never read by pricing/financial code).
+  salePrice: number | null;
   calories: number | null;
   compareAtPrice: number | null;
   imageUrl: string | null;
@@ -82,6 +86,7 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
     calories: item.calories,
     compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,
@@ -125,6 +130,7 @@ export interface MenuItemSummaryResponseDto {
   descriptionAr: string;
   descriptionEn: string;
   basePrice: number;
+  salePrice: number | null;
   compareAtPrice: number | null;
   calories: number | null;
   badge: MenuItemBadge | null;
@@ -142,6 +148,7 @@ export function toMenuItemSummaryResponse(item: MenuItem): MenuItemSummaryRespon
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
     compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     calories: item.calories,
     badge: item.badge,
@@ -234,6 +241,7 @@ export function toAdminMenuItemResponse(
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
     calories: item.calories,
     compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,

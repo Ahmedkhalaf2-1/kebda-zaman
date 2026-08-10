@@ -1,9 +1,41 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PricingService } from './pricing.service';
+import { PricingService, resolveMenuItemPrice } from './pricing.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+
+describe('resolveMenuItemPrice — Menu Item sale price', () => {
+  it('returns basePrice when salePrice is null (no discount)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: null });
+    expect(price.toString()).toBe('20');
+  });
+
+  it('returns salePrice when it is valid (> 0 and < basePrice)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: D('15.00') });
+    expect(price.toString()).toBe('15');
+  });
+
+  it('falls back to basePrice when salePrice equals basePrice (defensive, should never occur post-validation)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: D('20.00') });
+    expect(price.toString()).toBe('20');
+  });
+
+  it('falls back to basePrice when salePrice exceeds basePrice (defensive)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: D('25.00') });
+    expect(price.toString()).toBe('20');
+  });
+
+  it('falls back to basePrice when salePrice is zero (defensive)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: D('0') });
+    expect(price.toString()).toBe('20');
+  });
+
+  it('falls back to basePrice when salePrice is negative (defensive)', () => {
+    const price = resolveMenuItemPrice({ basePrice: D('20.00'), salePrice: D('-5.00') });
+    expect(price.toString()).toBe('20');
+  });
+});
 
 /** Minimal PromoCode fixture — only the fields evaluatePromo reads. */
 function makePromo(overrides: Partial<Record<string, unknown>> = {}) {

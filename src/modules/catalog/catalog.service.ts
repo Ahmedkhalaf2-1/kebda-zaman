@@ -242,6 +242,7 @@ export class CatalogService {
   async createMenuItem(dto: MenuItemDto): Promise<AdminMenuItemResponseDto> {
     await this.assertCategoryExists(dto.categoryId);
     this.assertValidCompareAtPrice(dto.basePrice, dto.compareAtPrice ?? null);
+    this.assertValidSalePrice(dto.basePrice, dto.salePrice ?? null);
     if (dto.recommendationItemIds?.length) {
       // The new item's own id doesn't exist yet, so self-reference can't occur here.
       await this.validateRecommendationIds(dto.recommendationItemIds);
@@ -255,6 +256,7 @@ export class CatalogService {
         descriptionAr: dto.descriptionAr,
         descriptionEn: dto.descriptionEn,
         basePrice: dto.basePrice,
+        salePrice: dto.salePrice,
         calories: dto.calories,
         compareAtPrice: dto.compareAtPrice,
         badge: dto.badge,
@@ -332,7 +334,10 @@ export class CatalogService {
         ? dto.compareAtPrice
         : (existing.compareAtPrice?.toNumber() ?? null);
     const effectiveBadge = dto.badge !== undefined ? dto.badge : existing.badge;
+    const effectiveSalePrice =
+      dto.salePrice !== undefined ? dto.salePrice : (existing.salePrice?.toNumber() ?? null);
     this.assertValidCompareAtPrice(dto.basePrice, effectiveCompareAtPrice);
+    this.assertValidSalePrice(dto.basePrice, effectiveSalePrice);
     if (dto.recommendationItemIds) {
       await this.validateRecommendationIds(dto.recommendationItemIds, id);
     }
@@ -348,6 +353,7 @@ export class CatalogService {
             descriptionAr: dto.descriptionAr,
             descriptionEn: dto.descriptionEn,
             basePrice: dto.basePrice,
+            salePrice: effectiveSalePrice,
             calories: effectiveCalories,
             compareAtPrice: effectiveCompareAtPrice,
             badge: effectiveBadge,
@@ -409,6 +415,25 @@ export class CatalogService {
       where: { id },
       data: { deletedAt: new Date(), isAvailable: false },
     });
+  }
+
+  /**
+   * salePrice is the actual charged price when set (PricingService.resolveMenuItemPrice)
+   * — must be strictly less than basePrice. `> 0` is already enforced at the DTO
+   * layer (@IsPositive); this only checks the basePrice-dependent half, so it
+   * also re-validates on every update even when the DTO didn't touch
+   * salePrice itself (see the tri-state `effectiveSalePrice` callers): if an
+   * admin lowers basePrice until it no longer exceeds an untouched existing
+   * salePrice, this rejects the update rather than silently letting the
+   * discount collapse to zero or invert.
+   */
+  private assertValidSalePrice(basePrice: number, salePrice: number | null): void {
+    if (salePrice !== null && salePrice >= basePrice) {
+      throw new UnprocessableEntityException({
+        message: 'Sale price must be strictly less than the base price',
+        code: 'INVALID_SALE_PRICE',
+      });
+    }
   }
 
   /** compareAtPrice is a display-only "previous price" — never swapped, cleared, or recalculated here. */

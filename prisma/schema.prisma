@@ -187,6 +187,18 @@ model MenuItem {
   descriptionAr  String         @db.Text
   descriptionEn  String         @db.Text
   basePrice      Decimal        @db.Decimal(10, 2)
+  // Optional direct discount on this item — when set (and valid: > 0 and
+  // strictly less than basePrice, enforced in CatalogService), this is the
+  // ACTUAL price charged everywhere; basePrice itself is never overwritten
+  // and remains the permanent "original" price a sale reverts to when
+  // salePrice is cleared (set to null). PricingService.resolveMenuItemPrice
+  // is the single authoritative reader — every financial computation
+  // (cart/checkout/order snapshot) goes through it, never basePrice raw.
+  // Distinct from `compareAtPrice` below: that field is purely cosmetic (a
+  // "was" price never read by any pricing/financial code) and requires the
+  // admin to manually overwrite basePrice to run a sale, with no durable
+  // original price to auto-restore — not a substitute for this field.
+  salePrice      Decimal?       @db.Decimal(10, 2)
   // Optional kcal value shown on the menu. No calculation/derivation — admin-entered only.
   calories       Int?
   // Previous/original display price for a discounted item; basePrice remains the

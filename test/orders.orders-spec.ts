@@ -27,6 +27,7 @@ describe('Orders & Checkout (integration)', () => {
   let checkoutItem: { id: string };
   let cheapItem: { id: string };
   let optionsItem: { id: string; variantId: string; addonId: string };
+  let saleItem: { id: string };
 
   const cleanupUserIds: string[] = [];
   const deliveryAddress = {
@@ -153,6 +154,19 @@ describe('Orders & Checkout (integration)', () => {
       variantId: withOptions.variants[0].id,
       addonId: withOptions.addonGroups[0].addons[0].id,
     };
+
+    saleItem = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض',
+        nameEn: 'Sale Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('60.00'),
+        salePrice: D('45.00'),
+        imageUrl: 'https://example.test/img.png',
+      },
+    });
 
     await prisma.promoCode.createMany({
       data: [
@@ -438,6 +452,72 @@ describe('Orders & Checkout (integration)', () => {
       expect(item.selectedVariant.nameEn).toBe('Large');
       expect(item.selectedAddons[0].nameEn).toBe('Extra');
       expect(item.unitPrice).toBe(55);
+    });
+  });
+
+  // ===========================================================================
+  describe('Menu Item sale price (discount) — checkout & order snapshot', () => {
+    it('charges the salePrice at checkout and snapshots it on the OrderItem', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
+      expect(res.status).toBe(201);
+      expect(res.body.subtotal).toBe(90); // 45 (salePrice) * 2, not 60 * 2
+      expect(res.body.items[0].unitPrice).toBe(45);
+      expect(res.body.items[0].totalPrice).toBe(90);
+    });
+
+    it('applies a promo code on top of the already-discounted subtotal (no double discount, no bypass)', async () => {
+      const { accessToken } = await registerUser();
+      // quantity 2 -> subtotal 90 (>= the seeded 50.00 minimum order amount)
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH', promoCode: 'PHASE5-VALID10' });
+      expect(res.status).toBe(201);
+      expect(res.body.subtotal).toBe(90); // discounted item price (45) * 2, not 60 * 2 (120)
+      expect(res.body.discount).toBe(9); // 10% of the discounted subtotal (90), not of 120
+      expect(res.body.totalAmount).toBe(res.body.subtotal - res.body.discount + res.body.tax);
+    });
+
+    it('does not change an already-placed order when the MenuItem sale price is later changed or removed', async () => {
+      const { accessToken } = await registerUser();
+      // quantity 2 -> subtotal 90 (>= the seeded 50.00 minimum order amount)
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const checkout = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
+      expect(checkout.status).toBe(201);
+      const orderId = checkout.body.id;
+      expect(checkout.body.items[0].unitPrice).toBe(45);
+      const originalTotal = checkout.body.totalAmount;
+
+      // Admin later removes the discount entirely and changes the base price.
+      await prisma.menuItem.update({
+        where: { id: saleItem.id },
+        data: { salePrice: null, basePrice: D('99.00') },
+      });
+
+      const reread = await request(app.getHttpServer())
+        .get(`/api/v1/orders/${orderId}`)
+        .set('Authorization', `Bearer ${accessToken}`);
+      expect(reread.status).toBe(200);
+      expect(reread.body.items[0].unitPrice).toBe(45); // unchanged snapshot
+      expect(reread.body.totalAmount).toBe(originalTotal);
+
+      // Restore the fixture for any tests that run after this one.
+      await prisma.menuItem.update({
+        where: { id: saleItem.id },
+        data: { salePrice: D('45.00'), basePrice: D('60.00') },
+      });
     });
   });
 

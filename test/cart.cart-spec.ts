@@ -20,6 +20,8 @@ describe('Cart & Pricing (integration)', () => {
   let categoryId: string;
   let simpleItem: { id: string };
   let roundingItem: { id: string };
+  let saleItem: { id: string };
+  let saleItemWithVariant: { id: string; variantId: string };
   let itemWithOptions: {
     id: string;
     variantSmall: string;
@@ -91,6 +93,45 @@ describe('Cart & Pricing (integration)', () => {
         imageUrl: 'https://example.test/img.png',
       },
     });
+
+    saleItem = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض',
+        nameEn: 'Sale Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('40.00'),
+        salePrice: D('25.00'),
+        imageUrl: 'https://example.test/img.png',
+      },
+    });
+
+    const saleWithVariant = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض بخيار',
+        nameEn: 'Sale Item With Variant',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('50.00'),
+        salePrice: D('30.00'),
+        imageUrl: 'https://example.test/img.png',
+        variants: {
+          create: [
+            {
+              nameAr: 'كبير',
+              nameEn: 'Large',
+              priceDelta: D('10.00'),
+              isDefault: true,
+              isActive: true,
+            },
+          ],
+        },
+      },
+      include: { variants: true },
+    });
+    saleItemWithVariant = { id: saleWithVariant.id, variantId: saleWithVariant.variants[0].id };
 
     unavailableItem = await prisma.menuItem.create({
       data: {
@@ -370,6 +411,44 @@ describe('Cart & Pricing (integration)', () => {
   });
 
   // ===========================================================================
+  describe('PricingService.priceLines — salePrice (Menu Item discount)', () => {
+    it('charges the salePrice instead of basePrice for a discounted item', async () => {
+      const { lines, subtotal } = await pricingService.priceLines([
+        { menuItemId: saleItem.id, addonIds: [], quantity: 1 },
+      ]);
+      expect(lines[0].unitPrice.toString()).toBe('25'); // salePrice, not basePrice (40)
+      expect(subtotal.toString()).toBe('25');
+    });
+
+    it('multiplies the discounted unit price by quantity for the line total', async () => {
+      const { lines } = await pricingService.priceLines([
+        { menuItemId: saleItem.id, addonIds: [], quantity: 3 },
+      ]);
+      expect(lines[0].lineTotal.toString()).toBe('75'); // 25 * 3
+    });
+
+    it('layers variant/addon deltas on top of salePrice, never discounting the delta itself', async () => {
+      const { lines } = await pricingService.priceLines([
+        {
+          menuItemId: saleItemWithVariant.id,
+          variantId: saleItemWithVariant.variantId,
+          addonIds: [],
+          quantity: 1,
+        },
+      ]);
+      // salePrice (30) + variant delta (10) = 40 — the delta is untouched by the discount.
+      expect(lines[0].unitPrice.toString()).toBe('40');
+    });
+
+    it('charges basePrice as before for an item with no salePrice (non-discounted items unaffected)', async () => {
+      const { lines } = await pricingService.priceLines([
+        { menuItemId: simpleItem.id, addonIds: [], quantity: 1 },
+      ]);
+      expect(lines[0].unitPrice.toString()).toBe('42');
+    });
+  });
+
+  // ===========================================================================
   describe('PricingService.evaluatePromo', () => {
     it('computes a PERCENT discount', async () => {
       const { discount } = await pricingService.evaluatePromo(
@@ -564,6 +643,26 @@ describe('Cart & Pricing (integration)', () => {
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ menuItemId: unavailableItem.id, quantity: 1 });
       expect(unavailable.status).toBe(404);
+    });
+
+    it('adds a discounted item and charges/exposes the salePrice, not basePrice', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ menuItemId: saleItem.id, quantity: 2 });
+      expect(res.status).toBe(201);
+      const item = res.body.items.find(
+        (i: { menuItem: { id: string } }) => i.menuItem.id === saleItem.id,
+      );
+      expect(item.menuItem.basePrice).toBe(40); // original price still reported
+      expect(item.menuItem.salePrice).toBe(25); // discount reported alongside it
+      expect(item.unitPrice).toBe(25); // charged price is the sale price
+      expect(item.totalPrice).toBe(50); // 25 * 2
+
+      // Clean up so it doesn't affect the item-count-sensitive tests below.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/cart/items/${item.id}`)
+        .set('Authorization', `Bearer ${accessToken}`);
     });
 
     it('PUT /cart/items/:id updates quantity and recomputes totalPrice', async () => {

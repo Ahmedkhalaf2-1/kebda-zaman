@@ -289,6 +289,7 @@ describe('Catalog (integration)', () => {
           descriptionAr: 'وصف',
           descriptionEn: 'description',
           basePrice: new Prisma.Decimal('20.00'),
+          salePrice: new Prisma.Decimal('15.00'),
           compareAtPrice: new Prisma.Decimal('25.00'),
           calories: 450,
           badge: 'BESTSELLER',
@@ -311,6 +312,9 @@ describe('Catalog (integration)', () => {
         `/api/v1/menu/items/${withMetadata.id}`,
       );
       expect(withMetadataRes.status).toBe(200);
+      expect(withMetadataRes.body.basePrice).toBe(20);
+      expect(typeof withMetadataRes.body.salePrice).toBe('number');
+      expect(withMetadataRes.body.salePrice).toBe(15);
       expect(typeof withMetadataRes.body.compareAtPrice).toBe('number');
       expect(withMetadataRes.body.compareAtPrice).toBe(25);
       expect(withMetadataRes.body.calories).toBe(450);
@@ -318,6 +322,7 @@ describe('Catalog (integration)', () => {
 
       const plainRes = await request(app.getHttpServer()).get(`/api/v1/menu/items/${plain.id}`);
       expect(plainRes.status).toBe(200);
+      expect(plainRes.body.salePrice).toBeNull();
       expect(plainRes.body.compareAtPrice).toBeNull();
       expect(plainRes.body.calories).toBeNull();
       expect(plainRes.body.badge).toBeNull();
@@ -405,6 +410,7 @@ describe('Catalog (integration)', () => {
           'descriptionAr',
           'descriptionEn',
           'basePrice',
+          'salePrice',
           'compareAtPrice',
           'calories',
           'badge',

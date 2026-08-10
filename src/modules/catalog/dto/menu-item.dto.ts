@@ -8,6 +8,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   IsUUID,
   Min,
@@ -144,6 +145,16 @@ export class MenuItemDto {
   @IsNumber()
   @Min(0)
   basePrice!: number;
+
+  // Optional direct discount on this item — the price actually charged when
+  // set. Omitted -> preserve/unset; explicit null -> clear (removes the
+  // discount, basePrice is charged again). Must be > 0 (enforced here) and
+  // strictly less than basePrice (validated in the service, since that
+  // depends on basePrice too).
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  salePrice?: number | null;
 
   // Optional kcal value. Omitted -> preserve/unset; explicit null -> clear.
   @IsOptional()

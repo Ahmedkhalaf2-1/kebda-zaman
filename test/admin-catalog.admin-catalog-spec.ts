@@ -587,6 +587,166 @@ describe('Admin Catalog (integration)', () => {
   });
 
   // ===========================================================================
+  describe('Menu item sale price (discount)', () => {
+    async function setup() {
+      const admin = await registerAdmin();
+      const category = await request(app.getHttpServer())
+        .post('/api/v1/admin/categories')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCategoryPayload());
+      cleanupCategoryIds.push(category.body.id);
+      return { admin, categoryId: category.body.id as string };
+    }
+
+    it('creates an item with a valid salePrice', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+      expect(res.status).toBe(201);
+      expect(res.body.basePrice).toBe(20);
+      expect(res.body.salePrice).toBe(15);
+    });
+
+    it('accepts a salePrice just below basePrice (19.99 of 20)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 19.99 }));
+      expect(res.status).toBe(201);
+      expect(res.body.salePrice).toBe(19.99);
+    });
+
+    it('creates an item with no salePrice (null)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20 }));
+      expect(res.status).toBe(201);
+      expect(res.body.salePrice).toBeNull();
+    });
+
+    it('rejects a salePrice equal to basePrice (422)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 20 }));
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('INVALID_SALE_PRICE');
+    });
+
+    it('rejects a salePrice above basePrice (422)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 25 }));
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('INVALID_SALE_PRICE');
+    });
+
+    it('rejects a zero salePrice (400)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 0 }));
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a negative salePrice (400)', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: -5 }));
+      expect(res.status).toBe(400);
+    });
+
+    it('updates salePrice', async () => {
+      const { admin, categoryId } = await setup();
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+
+      const updated = await request(app.getHttpServer())
+        .put(`/api/v1/admin/menu/items/${created.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 12 }));
+      expect(updated.status).toBe(200);
+      expect(updated.body.salePrice).toBe(12);
+    });
+
+    it('removes a discount by explicitly setting salePrice: null, and basePrice is charged again', async () => {
+      const { admin, categoryId } = await setup();
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+
+      const updated = await request(app.getHttpServer())
+        .put(`/api/v1/admin/menu/items/${created.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: null }));
+      expect(updated.status).toBe(200);
+      expect(updated.body.salePrice).toBeNull();
+      expect(updated.body.basePrice).toBe(20); // original price intact, never overwritten
+    });
+
+    it('rejects an update that lowers basePrice below an unchanged, now-invalid salePrice (422), and leaves the row untouched', async () => {
+      const { admin, categoryId } = await setup();
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+
+      // basePrice moves to 12 without touching salePrice in this PUT body —
+      // the stored salePrice (15) would no longer be less than basePrice.
+      const updated = await request(app.getHttpServer())
+        .put(`/api/v1/admin/menu/items/${created.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 12 }));
+      expect(updated.status).toBe(422);
+      expect(updated.body.code).toBe('INVALID_SALE_PRICE');
+
+      const unchanged = await prisma.menuItem.findUnique({ where: { id: created.body.id } });
+      expect(unchanged?.basePrice.toNumber()).toBe(20);
+      expect(unchanged?.salePrice?.toNumber()).toBe(15);
+    });
+
+    it('allows lowering basePrice below an old salePrice when the same request also updates salePrice to a valid value', async () => {
+      const { admin, categoryId } = await setup();
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+
+      const updated = await request(app.getHttpServer())
+        .put(`/api/v1/admin/menu/items/${created.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 12, salePrice: 10 }));
+      expect(updated.status).toBe(200);
+      expect(updated.body.basePrice).toBe(12);
+      expect(updated.body.salePrice).toBe(10);
+    });
+
+    it('returns salePrice as a JSON number in the admin response', async () => {
+      const { admin, categoryId } = await setup();
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/menu/items')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newMenuItemPayload(categoryId, { basePrice: 20, salePrice: 15 }));
+      expect(res.status).toBe(201);
+      expect(typeof res.body.salePrice).toBe('number');
+    });
+  });
+
+  // ===========================================================================
   describe('Menu item recommendations (Often Ordered With)', () => {
     async function setup() {
       const admin = await registerAdmin();
