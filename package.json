@@ -38,6 +38,7 @@
     "test:admin-notifications": "jest --config ./test/jest-admin-notifications.json",
     "test:production": "jest --config ./test/jest-production.json",
     "test:rate-limits": "jest --config ./test/jest-rate-limits.json",
+    "test:menu-offers": "jest --config ./test/jest-menu-offers.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed"

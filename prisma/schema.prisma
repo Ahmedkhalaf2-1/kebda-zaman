@@ -209,6 +209,7 @@ model MenuItem {
   favorites          Favorite[]
   recommendations    MenuItemRecommendation[] @relation("MenuItemRecommendations")
   recommendedInLists MenuItemRecommendation[] @relation("RecommendedMenuItem")
+  menuOffers         MenuOffer[]
 
   @@index([categoryId])
   @@index([isAvailable])
@@ -289,6 +290,38 @@ model Addon {
   cartItemAddons CartItemAddon[]
 
   @@index([addonGroupId])
+}
+
+/// Admin-curated marketing banner linking to an existing MenuItem — image +
+/// optional schedule, no pricing/discount fields of its own (that's PromoCode's
+/// job, not this model's). Visual-only: Menu → Offer Banner → tap → the linked
+/// MenuItem's detail page. `imageUrl` is always a reference returned by the
+/// existing generic upload endpoint (POST /admin/uploads/image) — this model
+/// never stores image bytes. No `deletedAt` — unlike Category/MenuItem/PromoCode,
+/// this follows NotificationCampaign's convention (the closest existing
+/// marketing-content model with a real DELETE endpoint): hard delete, since an
+/// offer has no history/audit requirement once removed. `onDelete: Cascade`
+/// mirrors Favorite's MenuItem relation — safe because MenuItem is only ever
+/// soft-deleted via the admin API (deletedAt), so this cascade would only ever
+/// fire on a raw DB-level hard delete, never through the app itself.
+model MenuOffer {
+  id          String    @id @default(uuid()) @db.Uuid
+  menuItemId  String    @db.Uuid
+  imageUrl    String
+  title       String?
+  description String?   @db.Text
+  isActive    Boolean   @default(true)
+  // Scheduling window — both null means "always visible" (subject to isActive).
+  startAt     DateTime?
+  endAt       DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([menuItemId])
+  @@index([isActive, sortOrder])
 }
 
 // ---------------------------------------------------------------------------
