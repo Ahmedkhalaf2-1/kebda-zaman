@@ -24,9 +24,11 @@ import {
 } from '../loyalty/loyalty.service';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import {
+  AdminOrderResponseDto,
   OrderLoyaltyRedemptionDto,
   OrderResponseDto,
   OrderStatusResponseDto,
+  toAdminOrderResponse,
   toFrontendStatus,
   toOrderResponse,
   toStatusHistoryEntry,
@@ -40,6 +42,9 @@ import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
 const orderInclude = {
   user: true,
   items: { include: { customizations: true }, orderBy: { createdAt: 'asc' } },
+  // Latest payment only — enough to read authorizedAt for the
+  // paymentAuthorizedAt / admin authorization-aging-warning fields.
+  payments: { orderBy: { createdAt: 'desc' }, take: 1 },
 } satisfies Prisma.OrderInclude;
 
 const MAX_ORDER_NUMBER_ATTEMPTS = 5;
@@ -544,7 +549,7 @@ export class OrdersService {
   }
 
   /** ADMIN: every order, optionally filtered by status / free-text search. */
-  async adminListOrders(query: AdminListOrdersDto): Promise<OrderResponseDto[]> {
+  async adminListOrders(query: AdminListOrdersDto): Promise<AdminOrderResponseDto[]> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const orders = await this.prisma.order.findMany({
@@ -565,11 +570,11 @@ export class OrdersService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return orders.map((order) => toOrderResponse(order));
+    return orders.map((order) => toAdminOrderResponse(order));
   }
 
   /** ADMIN: no ownership restriction — any order. */
-  async adminGetOrder(orderId: string): Promise<OrderResponseDto> {
+  async adminGetOrder(orderId: string): Promise<AdminOrderResponseDto> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: orderInclude,
@@ -577,7 +582,7 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
     }
-    return toOrderResponse(order);
+    return toAdminOrderResponse(order);
   }
 
   /**
@@ -611,53 +616,41 @@ export class OrdersService {
       });
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      // Optimistic concurrency claim: only succeeds if the order's status is
-      // still exactly what we read above (`existing.status`). If a second
-      // concurrent request already changed it, `count` comes back 0 — no row
-      // gets updated, so we never overwrite a status neither of us actually
-      // observed live.
-      const claimed = await tx.order.updateMany({
-        where: {
-          id: orderId,
-          status: existing.status,
-        },
-        data: {
-          status: newStatus,
-        },
-      });
-
-      if (claimed.count !== 1) {
-        const current = await tx.order.findUnique({ where: { id: orderId } });
-        throw new ConflictException({
-          message: 'Order status changed before this update could be applied',
-          code: 'ORDER_STATUS_CHANGED',
-          details: {
-            expectedStatus: existing.status,
-            currentStatus: current?.status ?? null,
-          },
-        });
+    // Capture/void gating (Moyasar authorize+capture/void flow): must
+    // succeed BEFORE the order transition below is allowed to commit — the
+    // core business rule is that an order is never marked CONFIRMED before
+    // its money is actually captured. A no-op for CASH/WALLET orders and for
+    // a CARD order whose payment was never authorized (nothing to void, so
+    // REJECT still proceeds); a CARD ACCEPT with no authorized payment
+    // throws and blocks the transition entirely (see PaymentsService).
+    if (existing.paymentMethod === 'CARD') {
+      if (newStatus === 'CONFIRMED') {
+        await this.paymentsService.captureAuthorizedPayment(orderId);
+      } else if (newStatus === 'CANCELLED') {
+        await this.paymentsService.voidAuthorizedPayment(orderId);
       }
+    }
 
-      await tx.orderStatusHistory.create({
-        data: {
-          orderId,
-          fromStatus: existing.status,
-          toStatus: newStatus,
-          changedByUserId: adminUserId,
-          note: note ?? null,
-        },
-      });
-
-      const result = await tx.order.findUnique({ where: { id: orderId }, include: orderInclude });
-      if (!result) {
-        throw new InternalServerErrorException({
-          message: 'Order could not be reloaded after a committed status update',
-          code: 'ORDER_RELOAD_FAILED',
-        });
+    let updated: Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
+    try {
+      updated = await this.runStatusTransition(
+        orderId,
+        existing.status,
+        newStatus,
+        adminUserId,
+        note,
+      );
+    } catch (error) {
+      // The capture above already succeeded at Moyasar, but a second admin
+      // action won the optimistic-concurrency race and changed the order
+      // first — the just-captured payment is now orphaned from the order's
+      // actual state. Self-heal with a compensating void rather than leaving
+      // money held against an order nobody confirmed.
+      if (existing.paymentMethod === 'CARD' && newStatus === 'CONFIRMED') {
+        await this.paymentsService.compensateOrphanedCapture(orderId);
       }
-      return result;
-    });
+      throw error;
+    }
 
     if (isTerminalCompletion(newStatus)) {
       try {
@@ -690,6 +683,68 @@ export class OrdersService {
     }
 
     return toOrderResponse(updated);
+  }
+
+  /**
+   * The optimistic-concurrency status claim + history write, unchanged from
+   * before the capture/void gating was added — split out purely so
+   * `updateOrderStatus` can wrap it in a try/catch for the compensating-void
+   * self-heal above.
+   */
+  private async runStatusTransition(
+    orderId: string,
+    fromStatus: OrderStatus,
+    newStatus: OrderStatus,
+    adminUserId: string,
+    note?: string,
+  ): Promise<Prisma.OrderGetPayload<{ include: typeof orderInclude }>> {
+    return this.prisma.$transaction(async (tx) => {
+      // Optimistic concurrency claim: only succeeds if the order's status is
+      // still exactly what we read above (`fromStatus`). If a second
+      // concurrent request already changed it, `count` comes back 0 — no row
+      // gets updated, so we never overwrite a status neither of us actually
+      // observed live.
+      const claimed = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: fromStatus,
+        },
+        data: {
+          status: newStatus,
+        },
+      });
+
+      if (claimed.count !== 1) {
+        const current = await tx.order.findUnique({ where: { id: orderId } });
+        throw new ConflictException({
+          message: 'Order status changed before this update could be applied',
+          code: 'ORDER_STATUS_CHANGED',
+          details: {
+            expectedStatus: fromStatus,
+            currentStatus: current?.status ?? null,
+          },
+        });
+      }
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          fromStatus,
+          toStatus: newStatus,
+          changedByUserId: adminUserId,
+          note: note ?? null,
+        },
+      });
+
+      const result = await tx.order.findUnique({ where: { id: orderId }, include: orderInclude });
+      if (!result) {
+        throw new InternalServerErrorException({
+          message: 'Order could not be reloaded after a committed status update',
+          code: 'ORDER_RELOAD_FAILED',
+        });
+      }
+      return result;
+    });
   }
 
   private generateOrderNumber(): string {

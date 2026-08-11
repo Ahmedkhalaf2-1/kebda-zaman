@@ -53,7 +53,16 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  // Moyasar authorize-only hold (source.manual=true) — money is held on the
+  // card but not yet taken. Set only for CARD payments; COD/WALLET never use it.
+  AUTHORIZED
   PAID
+  // Admin accepted the order -> AUTHORIZED was captured. Distinct from PAID
+  // (which COD uses for "collected on delivery") so the two payment methods'
+  // terminal-success states never get confused with each other.
+  CAPTURED
+  // Admin rejected the order -> the AUTHORIZED hold was released, no money taken.
+  VOIDED
   FAILED
   REFUNDED
 }
@@ -132,6 +141,7 @@ model User {
   addresses        Address[]
   favorites        Favorite[]
   loyaltyAccount   LoyaltyAccount?
+  savedCards       SavedCard[]
 
   @@index([email])
   @@index([role])
@@ -540,7 +550,8 @@ model OrderStatusHistory {
 // Payments (plan §2.14)
 // ---------------------------------------------------------------------------
 
-/// Gateway-agnostic payment record. Plan §2.14. No gateway integration in Phase 1.
+/// Gateway-agnostic payment record. Plan §2.14. Moyasar (CARD) adds the
+/// authorize/capture/void fields below; COD (CASH) never sets them.
 model Payment {
   id             String        @id @default(uuid()) @db.Uuid
   orderId        String        @db.Uuid
@@ -552,13 +563,49 @@ model Payment {
   providerRef    String?
   idempotencyKey String        @unique
   rawWebhookJson Json?
+  // Set when Moyasar reports `authorized` (the initial card hold), `captured`
+  // (admin accepted), or `voided` (admin rejected) respectively — mirrors
+  // `status` for auditability even after later transitions overwrite `status`.
+  authorizedAt   DateTime?
+  capturedAt     DateTime?
+  voidedAt       DateTime?
+  // Which saved card (if any) this payment was made/authorized with — set
+  // only when the customer paid via a stored token, never for a fresh card.
+  savedCardId    String?       @db.Uuid
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  savedCard SavedCard? @relation(fields: [savedCardId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
   @@index([providerRef])
+  @@index([savedCardId])
+}
+
+/// A tokenized card on file (Moyasar tokenization — plan Moyasar-integration
+/// §9). Never stores raw PAN/CVV: `token` is the Moyasar-issued token id,
+/// everything else is display-only metadata mirrored from Moyasar's token
+/// object at save time.
+model SavedCard {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  provider  String // "moyasar" — mirrors Payment.provider's convention
+  token     String    @unique
+  brand     String // visa | mastercard | mada | ...
+  lastFour  String
+  expMonth  Int
+  expYear   Int
+  status    String // mirrors the Moyasar token status (active | inactive | initiated)
+  isDefault Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -684,7 +731,7 @@ model DeliveryDistanceTier {
   minDistanceKm Decimal  @db.Decimal(5, 2)
   maxDistanceKm Decimal  @db.Decimal(5, 2)
   deliveryFee   Decimal  @db.Decimal(10, 2)
-  minimumOrder  Decimal  @db.Decimal(10, 2) @default(0)
+  minimumOrder  Decimal  @default(0) @db.Decimal(10, 2)
   isActive      Boolean  @default(true)
   sortOrder     Int      @default(0)
   createdAt     DateTime @default(now())

@@ -5,6 +5,7 @@ import {
   OrderItemCustomization,
   OrderStatus,
   OrderStatusHistory,
+  Payment,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -228,11 +229,15 @@ export interface OrderResponseDto {
   deliveryDurationSeconds: number | null;
   /** `null` for PICKUP orders and for orders placed before the distance-pricing migration. */
   deliveryTier: OrderDeliveryTierDto | null;
+  /** When the current CARD payment was authorized (Moyasar hold created) — `null` for CASH/WALLET orders and before authorization completes. */
+  paymentAuthorizedAt: string | null;
 }
 
 export type OrderWithRelations = Order & {
   user: User;
   items: OrderItemWithCustomizations[];
+  /** Latest Payment row only (`orderInclude` takes 1, newest first) — enough to read `authorizedAt`. */
+  payments?: Payment[];
 };
 
 export function toOrderResponse(
@@ -279,6 +284,31 @@ export function toOrderResponse(
             maxDistanceKm: order.deliveryTierMaxKmSnapshot.toFixed(2),
           }
         : null,
+    paymentAuthorizedAt: order.payments?.[0]?.authorizedAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * Admin-only visibility nudge (approved decision — no auto-void/auto-cancel):
+ * an order still sitting AUTHORIZED past this many hours gets a flag on the
+ * admin order list/detail so staff can act manually. Well inside Moyasar's
+ * ~14-day Mada authorization window, just an early operational signal.
+ */
+export const AUTHORIZATION_AGING_THRESHOLD_HOURS = 24;
+
+export interface AdminOrderResponseDto extends OrderResponseDto {
+  /** true only when paymentStatus is still AUTHORIZED and it's been longer than AUTHORIZATION_AGING_THRESHOLD_HOURS. */
+  authorizationAgingWarning: boolean;
+}
+
+export function toAdminOrderResponse(order: OrderWithRelations): AdminOrderResponseDto {
+  const base = toOrderResponse(order);
+  const authorizedAt = order.payments?.[0]?.authorizedAt ?? null;
+  const ageHours = authorizedAt ? (Date.now() - authorizedAt.getTime()) / (1000 * 60 * 60) : 0;
+  return {
+    ...base,
+    authorizationAgingWarning:
+      base.paymentStatus === 'AUTHORIZED' && ageHours > AUTHORIZATION_AGING_THRESHOLD_HOURS,
   };
 }
 

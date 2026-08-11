@@ -5,7 +5,13 @@ import * as Joi from 'joi';
  * and throws (fails fast) if a required variable is missing or malformed.
  */
 // Secret-bearing keys checked by the production placeholder guard below.
-const SECRET_ENV_KEYS = ['JWT_ACCESS_SECRET', 'DATABASE_URL', 'POSTGRES_PASSWORD'] as const;
+const SECRET_ENV_KEYS = [
+  'JWT_ACCESS_SECRET',
+  'DATABASE_URL',
+  'POSTGRES_PASSWORD',
+  'MOYASAR_SECRET_KEY',
+  'MOYASAR_WEBHOOK_SECRET',
+] as const;
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
@@ -42,6 +48,13 @@ export const validationSchema = Joi.object({
   // and every distance-pricing quote/checkout request fails with a
   // controlled 502 while unset.
   GOOGLE_ROUTES_API_KEY: Joi.string().allow('').optional(),
+  // Optional at boot (local/test/CI never need real Moyasar credentials) —
+  // MoyasarProvider logs at 'error' in production when unset, and every
+  // CARD payment intent/confirm/capture/void/webhook request fails with a
+  // controlled error while unset, mirroring GOOGLE_ROUTES_API_KEY above.
+  MOYASAR_SECRET_KEY: Joi.string().allow('').optional(),
+  MOYASAR_PUBLISHABLE_KEY: Joi.string().allow('').optional(),
+  MOYASAR_WEBHOOK_SECRET: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)

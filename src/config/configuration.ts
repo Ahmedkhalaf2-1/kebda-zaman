@@ -49,6 +49,17 @@ export interface AppConfig {
     // with a controlled 502) — see GoogleRoutesService.
     apiKey?: string;
   };
+  moyasar: {
+    // Backend-only — used for Basic Auth against api.moyasar.com. Never
+    // exposed to Flutter, never logged, never returned in any API response.
+    secretKey?: string;
+    // Safe to expose to Flutter (it's designed for client-side use) —
+    // returned from the payments/intent endpoint, never used server-side.
+    publishableKey?: string;
+    // Compared against the `secret_token` field inside each webhook payload
+    // body (Moyasar puts the shared secret in the JSON body, not a header).
+    webhookSecret?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -88,5 +99,10 @@ export default (): AppConfig => ({
   },
   googleRoutes: {
     apiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,
+  },
+  moyasar: {
+    secretKey: process.env.MOYASAR_SECRET_KEY || undefined,
+    publishableKey: process.env.MOYASAR_PUBLISHABLE_KEY || undefined,
+    webhookSecret: process.env.MOYASAR_WEBHOOK_SECRET || undefined,
   },
 });
