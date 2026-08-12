@@ -63,6 +63,13 @@ export interface OrderItemMenuSnapshotDto {
 
 export interface OrderItemCustomizationSnapshotDto {
   id: string;
+  /** Soft reference (plain UUID, not an FK) to the live MenuItemVariant/
+   * MenuItemAddon this snapshot was taken from — null if the original
+   * variant/addon row is unknown (pre-existing rows created before this
+   * field was tracked). Lets a client re-look-up the live item for a
+   * reorder flow; never re-derive display data from it, the snapshot
+   * fields above remain the source of truth for what was actually ordered. */
+  refId: string | null;
   nameAr: string;
   nameEn: string;
   priceSnapshot: number;
@@ -73,6 +80,13 @@ export interface OrderItemCustomizationSnapshotDto {
  * is that it never changes when the catalog does. */
 export interface OrderItemResponseDto {
   id: string;
+  /** Soft reference (plain UUID, not an FK) to the live MenuItem this
+   * snapshot was taken from — null if the item was deleted since, or for
+   * historical rows predating this field. Lets a client re-look-up the
+   * live item (price/availability) for a reorder flow; the `menuItem`
+   * snapshot below remains the source of truth for what was actually
+   * ordered. */
+  menuItemId: string | null;
   menuItem: OrderItemMenuSnapshotDto;
   selectedVariant: OrderItemCustomizationSnapshotDto | null;
   selectedAddons: OrderItemCustomizationSnapshotDto[];
@@ -92,6 +106,7 @@ export function toOrderItemResponse(item: OrderItemWithCustomizations): OrderIte
 
   return {
     id: item.id,
+    menuItemId: item.menuItemId,
     menuItem: {
       nameAr: item.nameArSnapshot,
       nameEn: item.nameEnSnapshot,
@@ -100,6 +115,7 @@ export function toOrderItemResponse(item: OrderItemWithCustomizations): OrderIte
     selectedVariant: variant
       ? {
           id: variant.id,
+          refId: variant.refId,
           nameAr: variant.nameArSnapshot,
           nameEn: variant.nameEnSnapshot,
           priceSnapshot: variant.priceSnapshot.toNumber(),
@@ -107,6 +123,7 @@ export function toOrderItemResponse(item: OrderItemWithCustomizations): OrderIte
       : null,
     selectedAddons: addons.map((addon) => ({
       id: addon.id,
+      refId: addon.refId,
       nameAr: addon.nameArSnapshot,
       nameEn: addon.nameEnSnapshot,
       priceSnapshot: addon.priceSnapshot.toNumber(),
