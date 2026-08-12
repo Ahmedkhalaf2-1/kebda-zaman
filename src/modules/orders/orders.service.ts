@@ -25,11 +25,13 @@ import {
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import {
   AdminOrderResponseDto,
+  KitchenOrderResponseDto,
   OrderLoyaltyRedemptionDto,
   OrderResponseDto,
   OrderStatusResponseDto,
   toAdminOrderResponse,
   toFrontendStatus,
+  toKitchenOrderResponse,
   toOrderResponse,
   toStatusHistoryEntry,
   FRONTEND_STATUS_TO_ORDER_STATUS,
@@ -583,6 +585,32 @@ export class OrdersService {
       throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
     }
     return toAdminOrderResponse(order);
+  }
+
+  /** KITCHEN's live queue — only orders actively being cooked (accepted, not yet
+   * handed off). No customer/payment data selected — the read-only ticket view
+   * (KitchenOrderResponseDto) never needs it. */
+  async kitchenListOrders(): Promise<KitchenOrderResponseDto[]> {
+    const orders = await this.prisma.order.findMany({
+      where: { status: { in: ['CONFIRMED', 'PREPARING'] } },
+      include: { items: { include: { customizations: true }, orderBy: { createdAt: 'asc' } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return orders.map(toKitchenOrderResponse);
+  }
+
+  /** Unscoped by status (unlike the list) — a kitchen worker already viewing an
+   * order shouldn't hit a 404 just because cashier/admin moved it along
+   * mid-view. Still the same trimmed, no-PII/no-payment ticket shape. */
+  async kitchenGetOrder(orderId: string): Promise<KitchenOrderResponseDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: { include: { customizations: true }, orderBy: { createdAt: 'asc' } } },
+    });
+    if (!order) {
+      throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+    }
+    return toKitchenOrderResponse(order);
   }
 
   /**

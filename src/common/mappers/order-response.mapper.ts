@@ -334,3 +334,28 @@ export interface OrderStatusResponseDto {
   statusHistory: OrderStatusHistoryEntryDto[];
   estimatedDeliveryTime: string | null;
 }
+
+/** Read-only "kitchen ticket" — item/prep details only. Deliberately excludes
+ * customer identity (name/phone/address) and everything payment-related;
+ * the KITCHEN role has no business reason to see either. */
+export interface KitchenOrderResponseDto {
+  id: string;
+  orderNumber: string;
+  status: string;
+  deliveryMethod: DeliveryMethod;
+  items: OrderItemResponseDto[];
+  createdAt: string;
+}
+
+export function toKitchenOrderResponse(
+  order: Order & { items: OrderItemWithCustomizations[] },
+): KitchenOrderResponseDto {
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    status: ORDER_STATUS_TO_FRONTEND[order.status],
+    deliveryMethod: order.deliveryMethod,
+    items: order.items.map(toOrderItemResponse),
+    createdAt: order.createdAt.toISOString(),
+  };
+}

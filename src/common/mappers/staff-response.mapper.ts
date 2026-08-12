@@ -1,8 +1,10 @@
 import { User } from '@prisma/client';
+import { StaffRole } from '../../modules/staff/dto/staff-role';
 
-/** Public API shape for an admin-managed cashier account. */
+/** Public API shape for an admin-managed staff account (cashier or kitchen). */
 export interface StaffResponseDto {
   id: string;
+  role: StaffRole;
   name: string;
   email: string | null;
   phone: string | null;
@@ -13,6 +15,7 @@ export interface StaffResponseDto {
 export function toStaffResponse(user: User): StaffResponseDto {
   return {
     id: user.id,
+    role: user.role as StaffRole,
     name: user.fullName,
     email: user.email,
     phone: user.phone,

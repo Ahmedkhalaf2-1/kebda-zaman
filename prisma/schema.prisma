@@ -27,6 +27,9 @@ enum UserRole {
   CUSTOMER
   ADMIN
   CASHIER
+  /// Read-only order-ticket viewer — sees item-level order details only, no
+  /// customer PII, no payment info, no status-change permissions.
+  KITCHEN
 }
 
 enum OrderStatus {

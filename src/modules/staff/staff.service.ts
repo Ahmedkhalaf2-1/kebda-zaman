@@ -5,6 +5,9 @@ import { PasswordService } from '../auth/password.service';
 import { StaffResponseDto, toStaffResponse } from '../../common/mappers/staff-response.mapper';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
+import { STAFF_ROLES, StaffRole } from './dto/staff-role';
+
+const STAFF_USER_ROLES: UserRole[] = [...STAFF_ROLES];
 
 @Injectable()
 export class StaffService {
@@ -13,9 +16,9 @@ export class StaffService {
     private readonly passwordService: PasswordService,
   ) {}
 
-  async list(): Promise<StaffResponseDto[]> {
+  async list(role?: StaffRole): Promise<StaffResponseDto[]> {
     const staff = await this.prisma.user.findMany({
-      where: { role: UserRole.CASHIER },
+      where: { role: role ?? { in: STAFF_USER_ROLES } },
       orderBy: { createdAt: 'desc' },
     });
     return staff.map(toStaffResponse);
@@ -31,7 +34,7 @@ export class StaffService {
         passwordHash,
         fullName: dto.name,
         phone: dto.phone,
-        role: UserRole.CASHIER,
+        role: dto.role,
         isGuest: false,
       },
     });
@@ -39,7 +42,7 @@ export class StaffService {
   }
 
   async update(id: string, dto: UpdateStaffDto): Promise<StaffResponseDto> {
-    const staff = await this.findCashierOrThrow(id);
+    const staff = await this.findStaffOrThrow(id);
 
     if (dto.email && dto.email !== staff.email) {
       await this.assertEmailAvailable(dto.email, id);
@@ -70,8 +73,10 @@ export class StaffService {
     }
   }
 
-  private async findCashierOrThrow(id: string) {
-    const staff = await this.prisma.user.findFirst({ where: { id, role: UserRole.CASHIER } });
+  private async findStaffOrThrow(id: string) {
+    const staff = await this.prisma.user.findFirst({
+      where: { id, role: { in: STAFF_USER_ROLES } },
+    });
     if (!staff) {
       throw new NotFoundException({ message: 'Staff account not found', code: 'STAFF_NOT_FOUND' });
     }

@@ -10,6 +10,7 @@ import { DeliveryPricingModule } from '../delivery-pricing/delivery-pricing.modu
 import { OrdersController } from './orders.controller';
 import { CheckoutController } from './checkout.controller';
 import { AdminOrdersController } from './admin-orders.controller';
+import { KitchenOrdersController } from './kitchen-orders.controller';
 import { OrdersService } from './orders.service';
 
 @Module({
@@ -23,7 +24,12 @@ import { OrdersService } from './orders.service';
     AdminNotificationsModule,
     DeliveryPricingModule,
   ],
-  controllers: [OrdersController, CheckoutController, AdminOrdersController],
+  controllers: [
+    OrdersController,
+    CheckoutController,
+    AdminOrdersController,
+    KitchenOrdersController,
+  ],
   providers: [OrdersService],
 })
 export class OrdersModule {}
