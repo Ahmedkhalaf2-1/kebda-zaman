@@ -477,6 +477,12 @@ model Order {
   deliveryTierMinKmSnapshot  Decimal?       @db.Decimal(5, 2)
   deliveryTierMaxKmSnapshot  Decimal?       @db.Decimal(5, 2)
   estimatedDeliveryTime      DateTime?
+  // Manual kitchen prep time (Manual Kitchen Preparation Time / ETA feature)
+  // — the most recently selected minutes-to-ready a KITCHEN/ADMIN user chose
+  // via PATCH /kitchen/orders/:id/preparation-time. Independent of `status`:
+  // setting this never itself moves the order through the status-transition
+  // map (see OrdersService.setPreparationTime). Null until first set.
+  preparationTimeMinutes     Int?
   createdAt                  DateTime       @default(now())
   updatedAt                  DateTime       @updatedAt
   cancelledAt                DateTime?

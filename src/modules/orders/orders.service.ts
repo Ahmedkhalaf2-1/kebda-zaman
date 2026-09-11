@@ -97,6 +97,13 @@ function isTerminalCompletion(status: OrderStatus): boolean {
   return status === 'DELIVERED' || status === 'PICKED_UP';
 }
 
+/** Manual kitchen prep time only makes sense while an order is actually in the
+ * kitchen preparation phase — `setPreparationTime` rejects every other status
+ * (ORDER_NOT_IN_PREPARATION), not just the terminal ones: PENDING hasn't
+ * entered the kitchen workflow yet, OUT_FOR_DELIVERY/READY_FOR_PICKUP have
+ * already left it, and DELIVERED/PICKED_UP/CANCELLED are terminal. */
+const PREPARABLE_ORDER_STATUSES: readonly OrderStatus[] = ['CONFIRMED', 'PREPARING'];
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -614,6 +621,52 @@ export class OrdersService {
   }
 
   /**
+   * Manual Kitchen Preparation Time / ETA. KITCHEN/ADMIN chooses how many
+   * minutes remain until the order is ready — the server clock is
+   * authoritative; a frontend-supplied absolute ETA is never accepted. Purely
+   * an ETA write: never touches `status` (setting 20 minutes must NOT itself
+   * move PENDING -> CONFIRMED or CONFIRMED -> PREPARING), payment
+   * capture/void, loyalty, or promo logic.
+   *
+   * Only usable while the order is actually in the kitchen preparation phase
+   * (CONFIRMED/PREPARING) — see PREPARABLE_ORDER_STATUSES.
+   *
+   * readyAt = now + minutes. For PICKUP, estimatedDeliveryTime = readyAt.
+   * For DELIVERY, estimatedDeliveryTime = readyAt + the order's already-
+   * authoritative deliveryDurationSeconds (from the Google Routes quote taken
+   * at checkout — never re-queried here); if that snapshot is null (only
+   * possible for orders placed before distance-pricing was added), readyAt
+   * itself is used as the safe ETA rather than failing the request.
+   */
+  async setPreparationTime(orderId: string, minutes: number): Promise<KitchenOrderResponseDto> {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+    }
+    if (!PREPARABLE_ORDER_STATUSES.includes(order.status)) {
+      throw new UnprocessableEntityException({
+        message: `Cannot set preparation time for a ${order.status} order — only CONFIRMED/PREPARING orders are in the kitchen preparation phase`,
+        code: 'ORDER_NOT_IN_PREPARATION',
+      });
+    }
+
+    const now = new Date();
+    const readyAt = new Date(now.getTime() + minutes * 60_000);
+    const estimatedDeliveryTime =
+      order.deliveryMethod === 'DELIVERY' && order.deliveryDurationSeconds !== null
+        ? new Date(readyAt.getTime() + order.deliveryDurationSeconds * 1000)
+        : readyAt;
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { preparationTimeMinutes: minutes, estimatedDeliveryTime },
+      include: { items: { include: { customizations: true }, orderBy: { createdAt: 'asc' } } },
+    });
+
+    return toKitchenOrderResponse(updated);
+  }
+
+  /**
    * ADMIN status transition (plan §7.5). Validates against the
    * delivery-method-aware transition map (Fix 12A —
    * `getAllowedTransitions`), then claims the transition with an optimistic-concurrency
@@ -644,6 +697,26 @@ export class OrdersService {
       });
     }
 
+    // ETA refresh on hand-off (Manual Kitchen Preparation Time / ETA feature):
+    // kitchen prep is finished once the order leaves PREPARING, so the manual
+    // prep-time-derived ETA is no longer the relevant number.
+    // - OUT_FOR_DELIVERY (DELIVERY only): remaining ETA is now purely travel —
+    //   refresh to this transition's time + the order's already-authoritative
+    //   deliveryDurationSeconds. Left untouched if that snapshot is null.
+    // - READY_FOR_PICKUP (PICKUP only): the order is ready right now.
+    // Never applied to DELIVERED/PICKED_UP/CANCELLED — those are terminal and
+    // must stop moving. Folded into the same optimistic-concurrency write as
+    // the status claim below, not a separate update.
+    const etaRefreshAt = new Date();
+    const etaRefresh: Pick<Prisma.OrderUpdateManyMutationInput, 'estimatedDeliveryTime'> = {};
+    if (newStatus === 'OUT_FOR_DELIVERY' && existing.deliveryDurationSeconds !== null) {
+      etaRefresh.estimatedDeliveryTime = new Date(
+        etaRefreshAt.getTime() + existing.deliveryDurationSeconds * 1000,
+      );
+    } else if (newStatus === 'READY_FOR_PICKUP') {
+      etaRefresh.estimatedDeliveryTime = etaRefreshAt;
+    }
+
     // Capture/void gating (Moyasar authorize+capture/void flow): must
     // succeed BEFORE the order transition below is allowed to commit — the
     // core business rule is that an order is never marked CONFIRMED before
@@ -667,6 +740,7 @@ export class OrdersService {
         newStatus,
         adminUserId,
         note,
+        etaRefresh,
       );
     } catch (error) {
       // The capture above already succeeded at Moyasar, but a second admin
@@ -717,7 +791,9 @@ export class OrdersService {
    * The optimistic-concurrency status claim + history write, unchanged from
    * before the capture/void gating was added — split out purely so
    * `updateOrderStatus` can wrap it in a try/catch for the compensating-void
-   * self-heal above.
+   * self-heal above. `etaRefresh` (Manual Kitchen Preparation Time / ETA
+   * feature) folds the OUT_FOR_DELIVERY/READY_FOR_PICKUP ETA write into this
+   * same claim — empty for every other transition, so it changes nothing.
    */
   private async runStatusTransition(
     orderId: string,
@@ -725,6 +801,7 @@ export class OrdersService {
     newStatus: OrderStatus,
     adminUserId: string,
     note?: string,
+    etaRefresh: Pick<Prisma.OrderUpdateManyMutationInput, 'estimatedDeliveryTime'> = {},
   ): Promise<Prisma.OrderGetPayload<{ include: typeof orderInclude }>> {
     return this.prisma.$transaction(async (tx) => {
       // Optimistic concurrency claim: only succeeds if the order's status is
@@ -739,6 +816,7 @@ export class OrdersService {
         },
         data: {
           status: newStatus,
+          ...etaRefresh,
         },
       });
 

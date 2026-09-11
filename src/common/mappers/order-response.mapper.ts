@@ -316,6 +316,9 @@ export const AUTHORIZATION_AGING_THRESHOLD_HOURS = 24;
 export interface AdminOrderResponseDto extends OrderResponseDto {
   /** true only when paymentStatus is still AUTHORIZED and it's been longer than AUTHORIZATION_AGING_THRESHOLD_HOURS. */
   authorizationAgingWarning: boolean;
+  /** Manual kitchen prep time (minutes-to-ready) most recently set by KITCHEN/ADMIN —
+   * admins may inspect/override it, so it's exposed here (never to customers). */
+  preparationTimeMinutes: number | null;
 }
 
 export function toAdminOrderResponse(order: OrderWithRelations): AdminOrderResponseDto {
@@ -326,6 +329,7 @@ export function toAdminOrderResponse(order: OrderWithRelations): AdminOrderRespo
     ...base,
     authorizationAgingWarning:
       base.paymentStatus === 'AUTHORIZED' && ageHours > AUTHORIZATION_AGING_THRESHOLD_HOURS,
+    preparationTimeMinutes: order.preparationTimeMinutes,
   };
 }
 
@@ -337,7 +341,10 @@ export interface OrderStatusResponseDto {
 
 /** Read-only "kitchen ticket" — item/prep details only. Deliberately excludes
  * customer identity (name/phone/address) and everything payment-related;
- * the KITCHEN role has no business reason to see either. */
+ * the KITCHEN role has no business reason to see either.
+ * `preparationTimeMinutes`/`estimatedDeliveryTime` are safe operational data
+ * (Manual Kitchen Preparation Time / ETA feature) — the manually-set
+ * minutes-to-ready and the resulting ETA (see OrdersService.setPreparationTime). */
 export interface KitchenOrderResponseDto {
   id: string;
   orderNumber: string;
@@ -345,6 +352,8 @@ export interface KitchenOrderResponseDto {
   deliveryMethod: DeliveryMethod;
   items: OrderItemResponseDto[];
   createdAt: string;
+  preparationTimeMinutes: number | null;
+  estimatedDeliveryTime: string | null;
 }
 
 export function toKitchenOrderResponse(
@@ -357,5 +366,7 @@ export function toKitchenOrderResponse(
     deliveryMethod: order.deliveryMethod,
     items: order.items.map(toOrderItemResponse),
     createdAt: order.createdAt.toISOString(),
+    preparationTimeMinutes: order.preparationTimeMinutes,
+    estimatedDeliveryTime: order.estimatedDeliveryTime?.toISOString() ?? null,
   };
 }
