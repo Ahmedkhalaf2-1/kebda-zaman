@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import {
   AdminCategoryResponseDto,
   CategoryResponseDto,
@@ -18,6 +19,7 @@ import {
   AdminMenuItemResponseDto,
   MenuItemDetailResponseDto,
   MenuItemResponseDto,
+  MenuItemWithRelations,
   PUBLIC_MENU_ITEM_INCLUDE,
   toAdminMenuItemResponse,
   toMenuItemDetailResponse,
@@ -35,7 +37,24 @@ const menuItemInclude = PUBLIC_MENU_ITEM_INCLUDE;
 
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reviewsService: ReviewsService,
+  ) {}
+
+  /**
+   * Batch-fetches rating aggregates for a page of menu items in ONE query
+   * (see ReviewsService.getMenuItemRatingAggregates) and maps each item to
+   * its response DTO — never a per-item COUNT/AVG query.
+   */
+  private async attachRatingsAndMap(
+    items: MenuItemWithRelations[],
+  ): Promise<MenuItemResponseDto[]> {
+    const aggregates = await this.reviewsService.getMenuItemRatingAggregates(
+      items.map((item) => item.id),
+    );
+    return items.map((item) => toMenuItemResponse(item, aggregates.get(item.id)));
+  }
 
   async listCategories(): Promise<CategoryResponseDto[]> {
     const categories = await this.prisma.category.findMany({
@@ -69,7 +88,7 @@ export class CatalogService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return items.map(toMenuItemResponse);
+    return this.attachRatingsAndMap(items);
   }
 
   /**
@@ -80,7 +99,7 @@ export class CatalogService {
    * and under an active, non-deleted category.
    */
   async getMenuItem(id: string): Promise<MenuItemDetailResponseDto> {
-    const [item, recommendations] = await Promise.all([
+    const [item, recommendations, ratingSummary] = await Promise.all([
       this.prisma.menuItem.findFirst({
         where: { id, deletedAt: null },
         include: menuItemInclude,
@@ -97,6 +116,7 @@ export class CatalogService {
         orderBy: { displayOrder: 'asc' },
         include: { recommendedMenuItem: true },
       }),
+      this.reviewsService.getMenuItemRatingSummary(id),
     ]);
     if (!item) {
       throw new NotFoundException({ message: 'Menu item not found', code: 'MENU_ITEM_NOT_FOUND' });
@@ -104,6 +124,7 @@ export class CatalogService {
     return toMenuItemDetailResponse(
       item,
       recommendations.map((recommendation) => recommendation.recommendedMenuItem),
+      ratingSummary,
     );
   }
 
@@ -129,7 +150,7 @@ export class CatalogService {
       include: menuItemInclude,
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    return items.map(toMenuItemResponse);
+    return this.attachRatingsAndMap(items);
   }
 
   async featured(): Promise<{
@@ -150,7 +171,7 @@ export class CatalogService {
       }),
       this.listCategories(),
     ]);
-    return { featured: featuredItems.map(toMenuItemResponse), categories };
+    return { featured: await this.attachRatingsAndMap(featuredItems), categories };
   }
 
   // ===========================================================================

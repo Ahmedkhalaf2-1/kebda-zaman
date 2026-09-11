@@ -31,6 +31,14 @@ export interface AddonGroupResponseDto {
   addons: AddonResponseDto[];
 }
 
+/** Rating aggregate attached to a menu item's public response — never per-item queried, see CatalogService/ReviewsService.getMenuItemRatingAggregates. */
+export interface MenuItemRatingSummary {
+  averageRating: number;
+  reviewCount: number;
+}
+
+const ZERO_RATING_SUMMARY: MenuItemRatingSummary = { averageRating: 0, reviewCount: 0 };
+
 export interface MenuItemResponseDto {
   id: string;
   categoryId: string;
@@ -51,6 +59,9 @@ export interface MenuItemResponseDto {
   badge: MenuItemBadge | null;
   variants: ItemVariantResponseDto[];
   addonGroups: AddonGroupResponseDto[];
+  /** Aggregate only — individual written reviews/comments are never exposed on a public catalog response. */
+  averageRating: number;
+  reviewCount: number;
 }
 
 /** Only active variants / available addons are exposed publicly (catalog + cart hydration). */
@@ -77,7 +88,10 @@ export type MenuItemWithRelations = Prisma.MenuItemGetPayload<{
   };
 }>;
 
-export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemResponseDto {
+export function toMenuItemResponse(
+  item: MenuItemWithRelations,
+  ratingSummary: MenuItemRatingSummary = ZERO_RATING_SUMMARY,
+): MenuItemResponseDto {
   return {
     id: item.id,
     categoryId: item.categoryId,
@@ -114,6 +128,8 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
         price: addon.price.toNumber(),
       })),
     })),
+    averageRating: ratingSummary.averageRating,
+    reviewCount: ratingSummary.reviewCount,
   };
 }
 
@@ -166,9 +182,10 @@ export interface MenuItemDetailResponseDto extends MenuItemResponseDto {
 export function toMenuItemDetailResponse(
   item: MenuItemWithRelations,
   oftenOrderedWithItems: MenuItem[],
+  ratingSummary: MenuItemRatingSummary = ZERO_RATING_SUMMARY,
 ): MenuItemDetailResponseDto {
   return {
-    ...toMenuItemResponse(item),
+    ...toMenuItemResponse(item, ratingSummary),
     oftenOrderedWith: oftenOrderedWithItems.map(toMenuItemSummaryResponse),
   };
 }
@@ -201,7 +218,7 @@ export interface AdminAddonGroupResponseDto {
 
 export interface AdminMenuItemResponseDto extends Omit<
   MenuItemResponseDto,
-  'variants' | 'addonGroups'
+  'variants' | 'addonGroups' | 'averageRating' | 'reviewCount'
 > {
   displayOrder: number | null;
   variants: AdminItemVariantResponseDto[];

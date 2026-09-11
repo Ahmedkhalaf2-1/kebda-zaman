@@ -145,6 +145,8 @@ model User {
   favorites        Favorite[]
   loyaltyAccount   LoyaltyAccount?
   savedCards       SavedCard[]
+  itemReviews      ItemReview[]
+  orderFeedbacks   OrderFeedback[]
 
   @@index([email])
   @@index([role])
@@ -486,6 +488,8 @@ model Order {
   items         OrderItem[]
   statusHistory OrderStatusHistory[]
   payments      Payment[]
+  itemReviews   ItemReview[]
+  orderFeedback OrderFeedback?
 
   @@index([userId])
   @@index([status])
@@ -511,6 +515,7 @@ model OrderItem {
 
   order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   customizations OrderItemCustomization[]
+  review         ItemReview?
 
   @@index([orderId])
   @@index([menuItemId])
@@ -890,5 +895,60 @@ model AdminNotification {
   updatedAt    DateTime @updatedAt
 
   @@index([isRead])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Ratings & Reviews.
+// ---------------------------------------------------------------------------
+
+/// A customer's rating/comment for one purchased OrderItem. `orderItemId` is
+/// unique — this is both the "one review per purchased line" business rule
+/// and the authoritative race guard (ReviewsService catches the resulting
+/// P2002 and converts it into a 409). `menuItemId` is a soft reference (plain
+/// UUID, no FK) — same convention as OrderItem.menuItemId — snapshotted from
+/// the reviewed OrderItem at creation time, so a later MenuItem soft-delete
+/// never invalidates or orphans an existing review. `userId`/`orderId` use
+/// the same onDelete convention as Order's own FKs (Restrict/Cascade) since
+/// orders (and therefore their reviews) are never hard-deleted in practice.
+model ItemReview {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  orderId     String   @db.Uuid
+  orderItemId String   @unique @db.Uuid
+  menuItemId  String?  @db.Uuid
+  rating      Int
+  comment     String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([orderId])
+  @@index([menuItemId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+/// Optional overall order-experience rating/comment — stored separately from
+/// per-item ItemReview rows. `orderId` unique enforces "one OrderFeedback per
+/// order" at the DB level (authoritative race guard, same pattern as above).
+model OrderFeedback {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  orderId   String   @unique @db.Uuid
+  rating    Int
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([rating])
   @@index([createdAt])
 }

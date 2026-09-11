@@ -33,6 +33,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { DeliveryPricingModule } from './modules/delivery-pricing/delivery-pricing.module';
 import { LocationsModule } from './modules/locations/locations.module';
 import { MenuOffersModule } from './modules/menu-offers/menu-offers.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -140,6 +141,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     DeliveryPricingModule,
     LocationsModule,
     MenuOffersModule,
+    ReviewsModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.
