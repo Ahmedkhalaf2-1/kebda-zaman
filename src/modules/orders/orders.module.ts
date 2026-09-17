@@ -11,7 +11,10 @@ import { OrdersController } from './orders.controller';
 import { CheckoutController } from './checkout.controller';
 import { AdminOrdersController } from './admin-orders.controller';
 import { KitchenOrdersController } from './kitchen-orders.controller';
+import { DriverOrdersController } from './driver-orders.controller';
 import { OrdersService } from './orders.service';
+import { DriverLocationService } from './driver-location.service';
+import { DriverLocationCleanupService } from './driver-location-cleanup.service';
 
 @Module({
   imports: [
@@ -29,7 +32,8 @@ import { OrdersService } from './orders.service';
     CheckoutController,
     AdminOrdersController,
     KitchenOrdersController,
+    DriverOrdersController,
   ],
-  providers: [OrdersService],
+  providers: [OrdersService, DriverLocationService, DriverLocationCleanupService],
 })
 export class OrdersModule {}

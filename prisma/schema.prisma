@@ -30,6 +30,11 @@ enum UserRole {
   /// Read-only order-ticket viewer — sees item-level order details only, no
   /// customer PII, no payment info, no status-change permissions.
   KITCHEN
+  /// Delivery driver (Phase 1). Admin-created only (no public registration).
+  /// Sees only orders explicitly assigned via Order.driverId, and only the
+  /// fields needed to fulfil a delivery — see DriverOrdersController /
+  /// toDriverOrderResponse.
+  DRIVER
 }
 
 enum OrderStatus {
@@ -134,19 +139,27 @@ model User {
   updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?
 
-  refreshTokens    RefreshToken[]
-  orders           Order[]
-  deviceTokens     DeviceToken[]
+  refreshTokens               RefreshToken[]
+  orders                      Order[]
+  deviceTokens                DeviceToken[]
   /// One active cart per user (Cart.userId is unique) — guest carts have userId = null.
-  cart             Cart?
-  statusChanges    OrderStatusHistory[]
-  createdCampaigns NotificationCampaign[]
-  addresses        Address[]
-  favorites        Favorite[]
-  loyaltyAccount   LoyaltyAccount?
-  savedCards       SavedCard[]
-  itemReviews      ItemReview[]
-  orderFeedbacks   OrderFeedback[]
+  cart                        Cart?
+  statusChanges               OrderStatusHistory[]
+  createdCampaigns            NotificationCampaign[]
+  addresses                   Address[]
+  favorites                   Favorite[]
+  loyaltyAccount              LoyaltyAccount?
+  savedCards                  SavedCard[]
+  itemReviews                 ItemReview[]
+  orderFeedbacks              OrderFeedback[]
+  /// Orders currently assigned to this DRIVER account. Distinct from `orders`
+  /// (the customer relation) — a driver is never the customer on its own
+  /// assigned orders.
+  assignedOrders              Order[]                        @relation("OrderDriver")
+  driverAssignmentsFrom       OrderDriverAssignmentHistory[] @relation("AssignmentHistoryFromDriver")
+  driverAssignmentsTo         OrderDriverAssignmentHistory[] @relation("AssignmentHistoryToDriver")
+  driverAssignmentChangesMade OrderDriverAssignmentHistory[] @relation("AssignmentHistoryChangedBy")
+  driverLocationSamples       OrderDriverLocation[]          @relation("OrderDriverLocationDriver")
 
   @@index([email])
   @@index([role])
@@ -483,24 +496,52 @@ model Order {
   // setting this never itself moves the order through the status-transition
   // map (see OrdersService.setPreparationTime). Null until first set.
   preparationTimeMinutes     Int?
+  // Driver assignment (Phase 1 of the delivery-driver system). Optional so
+  // every pre-existing order (and every PICKUP order, which is never
+  // assigned) remains valid. Set/cleared only by OrdersService.assignDriver
+  // (ADMIN-only) — never touched by checkout or any status transition.
+  // Deliberately NOT cleared when the driver account is later deactivated:
+  // the assignment (and its history) must survive so an admin can see who
+  // it was assigned to and reassign it — see OrdersService.assignDriver /
+  // StaffModule-style deactivation via `deletedAt`.
+  driverId                   String?        @db.Uuid
+  // Bumped by exactly 1 every time OrdersService.assignDriver actually
+  // changes `driverId` (assign, reassign, or unassign — never on a no-op
+  // re-assignment of the same driver, which intentionally leaves this
+  // untouched). This is the "assignment identity" a driver's location
+  // upload must be tagged with (Phase 2 live tracking): it is what lets the
+  // system reject a delayed location sample from an obsolete assignment,
+  // including one from the SAME driver re-assigned after being unassigned —
+  // a plain `driverId` equality check alone cannot distinguish "still the
+  // original assignment" from "reassigned back to the same driver", but a
+  // monotonically-incrementing version can. See OrderDriverLocation.
+  driverAssignmentVersion    Int            @default(0)
   createdAt                  DateTime       @default(now())
   updatedAt                  DateTime       @updatedAt
   cancelledAt                DateTime?
   cancelReason               String?
 
-  user          User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
-  appliedPromo  PromoCode?           @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
-  deliveryZone  DeliveryZone?        @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
-  items         OrderItem[]
-  statusHistory OrderStatusHistory[]
-  payments      Payment[]
-  itemReviews   ItemReview[]
-  orderFeedback OrderFeedback?
+  user                    User                           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appliedPromo            PromoCode?                     @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
+  deliveryZone            DeliveryZone?                  @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  /// The assigned driver — distinct relation from `user` (the customer).
+  driver                  User?                          @relation("OrderDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  items                   OrderItem[]
+  statusHistory           OrderStatusHistory[]
+  payments                Payment[]
+  itemReviews             ItemReview[]
+  orderFeedback           OrderFeedback?
+  driverAssignmentHistory OrderDriverAssignmentHistory[]
+  /// Latest known GPS sample for this order's CURRENT driver assignment
+  /// (Phase 2 live tracking) — null until the newly assigned driver submits
+  /// their first location. See OrderDriverLocation's own doc comment.
+  driverLocation          OrderDriverLocation?
 
   @@index([userId])
   @@index([status])
   @@index([createdAt])
   @@index([deliveryZoneId])
+  @@index([driverId])
 }
 
 /// Plan §2.12. Snapshot row — no updatedAt (immutable once created).
@@ -558,6 +599,64 @@ model OrderStatusHistory {
   changedByUser User? @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+}
+
+/// Audit trail for driver-assignment changes on a DELIVERY order — mirrors
+/// OrderStatusHistory's conventions (order + from/to + actor + timestamp) but
+/// tracks the driver relation instead of order status. `fromDriverId` is null
+/// for the initial assignment; `toDriverId` is null for an unassign.
+/// `changedByUserId` is always the ADMIN who made the change (assignment is
+/// never driver- or customer-initiated).
+model OrderDriverAssignmentHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  orderId         String   @db.Uuid
+  fromDriverId    String?  @db.Uuid
+  toDriverId      String?  @db.Uuid
+  changedByUserId String   @db.Uuid
+  createdAt       DateTime @default(now())
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromDriver    User? @relation("AssignmentHistoryFromDriver", fields: [fromDriverId], references: [id], onDelete: SetNull)
+  toDriver      User? @relation("AssignmentHistoryToDriver", fields: [toDriverId], references: [id], onDelete: SetNull)
+  changedByUser User  @relation("AssignmentHistoryChangedBy", fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([toDriverId])
+}
+
+/// Phase 2 live tracking — the SINGLE latest GPS sample for an order's
+/// current driver assignment. `orderId` is the primary key (not a separate
+/// uuid): this is a deliberate latest-only "current state" row, upserted in
+/// place on every valid update, NEVER an appended breadcrumb/history table
+/// (see DRIVER_DELIVERY_API_CONTRACT.md's Phase 2 tracking-lifecycle
+/// section). `assignmentVersion` is a copy of `Order.driverAssignmentVersion`
+/// as of the moment this sample was accepted — DriverLocationService compares
+/// it against the order's LIVE `driverAssignmentVersion` on every read, so a
+/// sample left behind by a reassigned-away (or reassigned-then-reassigned-
+/// back) driver can never resurface as if it were current, even before the
+/// row is physically cleaned up (see DriverLocationCleanupService).
+/// `capturedAt` (client-reported GPS fix time) is intentionally distinct from
+/// `receivedAt` (server receipt time, `@default(now())`) — DriverLocationService
+/// uses `capturedAt` both for staleness/freshness derivation and to reject an
+/// out-of-order/delayed sample from overwriting a newer one already stored
+/// for the same assignment.
+model OrderDriverLocation {
+  orderId           String   @id @db.Uuid
+  driverId          String   @db.Uuid
+  assignmentVersion Int
+  latitude          Decimal  @db.Decimal(9, 6)
+  longitude         Decimal  @db.Decimal(9, 6)
+  accuracyMeters    Decimal? @db.Decimal(7, 2)
+  headingDegrees    Decimal? @db.Decimal(5, 2)
+  speedMps          Decimal? @db.Decimal(6, 2)
+  capturedAt        DateTime
+  receivedAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  order  Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver User  @relation("OrderDriverLocationDriver", fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId])
 }
 
 // ---------------------------------------------------------------------------

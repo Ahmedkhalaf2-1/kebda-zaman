@@ -28,6 +28,7 @@ import { LoyaltyModule } from './modules/loyalty/loyalty.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { AdminNotificationsModule } from './modules/admin-notifications/admin-notifications.module';
 import { StaffModule } from './modules/staff/staff.module';
+import { DriversModule } from './modules/drivers/drivers.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { DeliveryPricingModule } from './modules/delivery-pricing/delivery-pricing.module';
@@ -136,6 +137,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     UploadsModule,
     AdminNotificationsModule,
     StaffModule,
+    DriversModule,
     CustomersModule,
     ReportsModule,
     DeliveryPricingModule,

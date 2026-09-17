@@ -7,7 +7,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { DeliveryMethod, OrderStatus, Prisma } from '@prisma/client';
+import { DeliveryMethod, OrderStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -36,10 +36,17 @@ import {
   toStatusHistoryEntry,
   FRONTEND_STATUS_TO_ORDER_STATUS,
 } from '../../common/mappers/order-response.mapper';
+import {
+  DriverOrderResponseDto,
+  DriverOrderWithRelations,
+  toDriverOrderHistoryResponse,
+  toDriverOrderResponse,
+} from '../../common/mappers/driver-order-response.mapper';
 import { DeliveryQuoteResult } from '../delivery-pricing/delivery-pricing.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
 import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
+import { ListDriverOrdersDto } from './dto/list-driver-orders.dto';
 
 const orderInclude = {
   user: true,
@@ -48,6 +55,33 @@ const orderInclude = {
   // paymentAuthorizedAt / admin authorization-aging-warning fields.
   payments: { orderBy: { createdAt: 'desc' }, take: 1 },
 } satisfies Prisma.OrderInclude;
+
+/** Trimmed include for driver-facing reads — no Payment join (Order already
+ * carries paymentMethod/paymentStatus directly) and only the two User fields
+ * a driver legitimately needs, never email. */
+const driverOrderInclude = {
+  user: { select: { fullName: true, phone: true } },
+  items: { include: { customizations: true }, orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.OrderInclude;
+
+/** A DELIVERY order assigned to a driver is "active" until it reaches a
+ * terminal status (DELIVERED/CANCELLED) — assignment can happen as early as
+ * PENDING (assignment never itself changes status), so this intentionally
+ * covers every non-terminal status, not just OUT_FOR_DELIVERY. */
+const DRIVER_ACTIVE_STATUSES: OrderStatus[] = [
+  'PENDING',
+  'CONFIRMED',
+  'PREPARING',
+  'OUT_FOR_DELIVERY',
+];
+
+/** Completed-delivery history — DELIVERED is the success case; a CANCELLED
+ * order that had been assigned is kept visible too (it did happen on this
+ * driver's queue) rather than silently vanishing. Both are terminal: a
+ * reassigned-away order (driverId no longer matches) is filtered out by the
+ * `driverId` clause below regardless of status, matching "previous driver
+ * immediately loses access". */
+const DRIVER_HISTORY_STATUSES: OrderStatus[] = ['DELIVERED', 'CANCELLED'];
 
 const MAX_ORDER_NUMBER_ATTEMPTS = 5;
 
@@ -684,10 +718,23 @@ export class OrdersService {
     newStatus: OrderStatus,
     adminUserId: string,
     note?: string,
+    options?: { expectedDriverId?: string },
   ): Promise<OrderResponseDto> {
     const existing = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!existing) {
       throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+    }
+
+    // Driver-initiated transitions (see driverStartDelivery/driverMarkDelivered)
+    // pass this so the ownership check and the status claim below are both
+    // read from/verified against the SAME transaction-scoped update — a
+    // reassignment racing this call makes the claim fail (count !== 1) rather
+    // than silently letting a just-unassigned driver's request through.
+    if (options?.expectedDriverId !== undefined && existing.driverId !== options.expectedDriverId) {
+      throw new NotFoundException({
+        message: 'Order not found or not assigned to you',
+        code: 'ORDER_NOT_ASSIGNED',
+      });
     }
 
     if (!getAllowedTransitions(existing.deliveryMethod, existing.status).includes(newStatus)) {
@@ -741,6 +788,7 @@ export class OrdersService {
         adminUserId,
         note,
         etaRefresh,
+        options?.expectedDriverId !== undefined ? { driverId: options.expectedDriverId } : {},
       );
     } catch (error) {
       // The capture above already succeeded at Moyasar, but a second admin
@@ -802,17 +850,20 @@ export class OrdersService {
     adminUserId: string,
     note?: string,
     etaRefresh: Pick<Prisma.OrderUpdateManyMutationInput, 'estimatedDeliveryTime'> = {},
+    extraClaimWhere: Prisma.OrderWhereInput = {},
   ): Promise<Prisma.OrderGetPayload<{ include: typeof orderInclude }>> {
     return this.prisma.$transaction(async (tx) => {
-      // Optimistic concurrency claim: only succeeds if the order's status is
-      // still exactly what we read above (`fromStatus`). If a second
-      // concurrent request already changed it, `count` comes back 0 — no row
+      // Optimistic concurrency claim: only succeeds if the order's status
+      // (and, for a driver-initiated transition, its driver assignment via
+      // extraClaimWhere) is still exactly what we read above. If a second
+      // concurrent request already changed it, `count` comes back 0— no row
       // gets updated, so we never overwrite a status neither of us actually
       // observed live.
       const claimed = await tx.order.updateMany({
         where: {
           id: orderId,
           status: fromStatus,
+          ...extraClaimWhere,
         },
         data: {
           status: newStatus,
@@ -851,6 +902,207 @@ export class OrdersService {
       }
       return result;
     });
+  }
+
+  /**
+   * ADMIN: assign, reassign, or unassign (`driverId: null`) a driver on a
+   * DELIVERY order. Assignment never itself changes `status` — it only ever
+   * writes `driverId` + an audit row. Reassigning immediately revokes the
+   * previous driver's access (their queries all filter on `driverId`, so a
+   * changed value simply stops matching); no separate "revoke" step exists
+   * or is needed.
+   */
+  async assignDriver(
+    orderId: string,
+    driverId: string | null,
+    adminUserId: string,
+  ): Promise<AdminOrderResponseDto> {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id: orderId } });
+      if (!order) {
+        throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
+      }
+      if (order.deliveryMethod !== 'DELIVERY') {
+        throw new UnprocessableEntityException({
+          message: 'Only DELIVERY orders can be assigned to a driver',
+          code: 'NOT_A_DELIVERY_ORDER',
+        });
+      }
+      if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
+        throw new UnprocessableEntityException({
+          message: `Cannot change the driver assignment for a ${order.status} order`,
+          code: 'ORDER_ALREADY_TERMINAL',
+        });
+      }
+
+      if (driverId !== null) {
+        const driver = await tx.user.findFirst({
+          where: { id: driverId, role: UserRole.DRIVER, deletedAt: null },
+          select: { id: true },
+        });
+        if (!driver) {
+          throw new UnprocessableEntityException({
+            message: 'Driver not found or not active',
+            code: 'DRIVER_NOT_AVAILABLE',
+          });
+        }
+      }
+
+      if (order.driverId === driverId) {
+        // No-op: already assigned to this exact driver (or already
+        // unassigned). Idempotent success, no audit noise.
+        const unchanged = await tx.order.findUniqueOrThrow({
+          where: { id: orderId },
+          include: orderInclude,
+        });
+        return toAdminOrderResponse(unchanged);
+      }
+
+      // Optimistic concurrency: only claims if driverId is still exactly what
+      // we just read — a second concurrent admin assignment call on the same
+      // order loses this race with a 409 instead of silently clobbering it.
+      // `driverAssignmentVersion` (Phase 2 live tracking) is bumped on every
+      // REAL change only — never on the no-op branch above — so
+      // DriverLocationService can reject a delayed location update from an
+      // obsolete assignment, including one from this same driver after being
+      // unassigned and reassigned back (a plain driverId check alone
+      // couldn't distinguish that from "still the original assignment").
+      const claimed = await tx.order.updateMany({
+        where: { id: orderId, driverId: order.driverId },
+        data: { driverId, driverAssignmentVersion: { increment: 1 } },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          message: 'Order driver assignment changed before this update could be applied',
+          code: 'ASSIGNMENT_CHANGED',
+        });
+      }
+
+      await tx.orderDriverAssignmentHistory.create({
+        data: {
+          orderId,
+          fromDriverId: order.driverId,
+          toDriverId: driverId,
+          changedByUserId: adminUserId,
+        },
+      });
+
+      const reloaded = await tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        include: orderInclude,
+      });
+      return toAdminOrderResponse(reloaded);
+    });
+  }
+
+  /** DRIVER: paginated orders currently assigned to the caller that have not
+   * yet reached a terminal status. */
+  async driverListActiveOrders(
+    driverId: string,
+    query: ListDriverOrdersDto,
+  ): Promise<DriverOrderResponseDto[]> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const orders = await this.prisma.order.findMany({
+      where: { driverId, status: { in: DRIVER_ACTIVE_STATUSES } },
+      include: driverOrderInclude,
+      orderBy: { createdAt: 'asc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return orders.map((order) => toDriverOrderResponse(order));
+  }
+
+  /** DRIVER: paginated completed-delivery history. Only orders still
+   * currently assigned to this driver (a reassigned-away order disappears
+   * from history too — see DRIVER_HISTORY_STATUSES doc comment). Customer
+   * phone is stripped — see toDriverOrderHistoryResponse. */
+  async driverListHistory(
+    driverId: string,
+    query: ListDriverOrdersDto,
+  ): Promise<DriverOrderResponseDto[]> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const orders = await this.prisma.order.findMany({
+      where: { driverId, status: { in: DRIVER_HISTORY_STATUSES } },
+      include: driverOrderInclude,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return orders.map((order) => toDriverOrderHistoryResponse(order));
+  }
+
+  /** DRIVER: a single assigned order's detail. Unscoped by status (like
+   * kitchenGetOrder) — a driver already viewing an order shouldn't 404 just
+   * because it reached a terminal status mid-view. Ownership (`driverId`) is
+   * still strictly enforced: any other order 404s, never leaking existence. */
+  async driverGetOrder(driverId: string, orderId: string): Promise<DriverOrderResponseDto> {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, driverId },
+      include: driverOrderInclude,
+    });
+    if (!order) {
+      throw new NotFoundException({
+        message: 'Order not found or not assigned to you',
+        code: 'ORDER_NOT_ASSIGNED',
+      });
+    }
+    return toDriverOrderResponse(order);
+  }
+
+  /** DRIVER: "Picked up / Start delivery" — PREPARING -> OUT_FOR_DELIVERY. */
+  async driverStartDelivery(driverId: string, orderId: string): Promise<DriverOrderResponseDto> {
+    return this.driverAdvanceStatus(driverId, orderId, 'OUT_FOR_DELIVERY');
+  }
+
+  /** DRIVER: "Delivered" — OUT_FOR_DELIVERY -> DELIVERED. Reuses
+   * updateOrderStatus so COD settlement / loyalty earning / the customer
+   * notification all fire exactly as they do for an admin-driven transition
+   * — never duplicated, never reimplemented. */
+  async driverMarkDelivered(driverId: string, orderId: string): Promise<DriverOrderResponseDto> {
+    return this.driverAdvanceStatus(driverId, orderId, 'DELIVERED');
+  }
+
+  /**
+   * Shared driver-transition path. Ownership is checked up front (404s a
+   * non-assigned/unknown order without revealing whether it exists), then:
+   *  - already at the target status -> idempotent replay, no history row, no
+   *    side effects re-fired (handles a duplicate/retried request safely).
+   *  - otherwise -> delegates to updateOrderStatus with expectedDriverId, whose
+   *    transition-map validation naturally rejects any skipped/invalid move
+   *    (e.g. PENDING -> DELIVERED) with the same INVALID_STATUS_TRANSITION the
+   *    admin path uses, and whose atomic claim (via extraClaimWhere) rejects a
+   *    reassignment that raced this exact call.
+   */
+  private async driverAdvanceStatus(
+    driverId: string,
+    orderId: string,
+    targetStatus: OrderStatus,
+  ): Promise<DriverOrderResponseDto> {
+    const existing = await this.prisma.order.findFirst({
+      where: { id: orderId, driverId },
+      include: driverOrderInclude,
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        message: 'Order not found or not assigned to you',
+        code: 'ORDER_NOT_ASSIGNED',
+      });
+    }
+    if (existing.status === targetStatus) {
+      return toDriverOrderResponse(existing as DriverOrderWithRelations);
+    }
+
+    await this.updateOrderStatus(orderId, targetStatus, driverId, undefined, {
+      expectedDriverId: driverId,
+    });
+
+    const reloaded = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: driverOrderInclude,
+    });
+    return toDriverOrderResponse(reloaded);
   }
 
   private generateOrderNumber(): string {

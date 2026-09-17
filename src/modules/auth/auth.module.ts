@@ -14,6 +14,10 @@ import { GoogleAuthService } from './google-auth.service';
   imports: [NotificationsModule],
   controllers: [AuthController, AdminAuthController],
   providers: [AuthService, TokenService, PasswordService, BruteForceService, GoogleAuthService],
-  exports: [PasswordService],
+  // TokenService is additionally exported so DriversModule can revoke a
+  // driver's refresh-token sessions immediately on deactivation (same
+  // mechanism logout-all already uses), not just rely on the next refresh
+  // attempt being rejected.
+  exports: [PasswordService, TokenService],
 })
 export class AuthModule {}

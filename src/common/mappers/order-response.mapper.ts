@@ -319,6 +319,10 @@ export interface AdminOrderResponseDto extends OrderResponseDto {
   /** Manual kitchen prep time (minutes-to-ready) most recently set by KITCHEN/ADMIN —
    * admins may inspect/override it, so it's exposed here (never to customers). */
   preparationTimeMinutes: number | null;
+  /** Currently assigned driver's user id, or `null` if unassigned — `null` for
+   * every PICKUP order (never assignable). See OrdersService.assignDriver /
+   * GET admin/drivers for the driver's own detail. */
+  driverId: string | null;
 }
 
 export function toAdminOrderResponse(order: OrderWithRelations): AdminOrderResponseDto {
@@ -330,6 +334,7 @@ export function toAdminOrderResponse(order: OrderWithRelations): AdminOrderRespo
     authorizationAgingWarning:
       base.paymentStatus === 'AUTHORIZED' && ageHours > AUTHORIZATION_AGING_THRESHOLD_HOURS,
     preparationTimeMinutes: order.preparationTimeMinutes,
+    driverId: order.driverId,
   };
 }
 
