@@ -91,7 +91,9 @@ export class CartService {
         toCartItemResponse(item.id, item.specialInstructions, lines[index]),
       ),
       appliedPromo,
-      deliveryFee: settings.deliveryFee.toNumber(),
+      // No deliveryMethod/deliveryZone is known yet at the cart stage — see
+      // CartResponseDto's doc comment. Never settings.deliveryFee here.
+      deliveryFee: 0,
       taxRate: settings.taxRatePercent.toNumber(),
     };
   }
@@ -208,7 +210,7 @@ export class CartService {
     const cart = await this.getOrCreateCart(userId);
     const inputs = this.toInputs(await this.loadItems(cart.id));
     const { subtotal } = await this.pricingService.priceLines(inputs);
-    const { promo } = await this.pricingService.evaluatePromo(code, subtotal);
+    const { promo } = await this.pricingService.evaluatePromo(code, subtotal, userId);
 
     await this.prisma.cart.update({ where: { id: cart.id }, data: { appliedPromoId: promo.id } });
     return this.buildResponse(cart.id, promo.id);

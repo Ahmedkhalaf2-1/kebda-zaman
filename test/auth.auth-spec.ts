@@ -461,6 +461,33 @@ describe('Auth & Users (integration)', () => {
   });
 
   // -------------------------------------------------------------------------
+  describe('Google Sign-In (POST /auth/google)', () => {
+    it('rejects a garbage/malformed token with generic 401 INVALID_GOOGLE_TOKEN', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/auth/google')
+        .send({ firebaseIdToken: 'not-a-real-firebase-id-token' });
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('INVALID_GOOGLE_TOKEN');
+      expect(res.body.message).toBe('Invalid Google authentication token');
+    });
+
+    it('rejects a missing firebaseIdToken with 400', async () => {
+      const res = await request(app.getHttpServer()).post('/api/v1/auth/google').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects unknown extra fields, including client-supplied identity data (forbidNonWhitelisted)', async () => {
+      const res = await request(app.getHttpServer()).post('/api/v1/auth/google').send({
+        firebaseIdToken: 'whatever',
+        email: 'attacker@example.com',
+        role: 'ADMIN',
+        firebaseUid: 'spoofed-uid',
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   describe('DTO validation', () => {
     it('rejects registration with an invalid email', async () => {
       const res = await request(app.getHttpServer())

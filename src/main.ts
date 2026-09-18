@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { buildCorsOptions } from './config/cors.config';
 import { STATIC_UPLOADS_PREFIX } from './modules/uploads/uploads.constants';
 
 async function bootstrap(): Promise<void> {
@@ -27,13 +28,11 @@ async function bootstrap(): Promise<void> {
   // loads from the separate web admin/mobile origins this API is built for.
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-  // CORS entirely from env — explicit origin allowlist, no wildcards.
+  // CORS: production frontend origins come from env (explicit allowlist, no
+  // wildcards); local Flutter Web dev origins (http://localhost:<any port>,
+  // http://127.0.0.1:<any port>) are always allowed — see cors.config.ts.
   const corsOrigins = config.get<string[]>('corsOrigins') ?? [];
-  app.enableCors({
-    origin: corsOrigins.length > 0 ? corsOrigins : false,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  });
+  app.enableCors(buildCorsOptions(corsOrigins));
 
   // Serves uploaded files as plain static assets at /uploads/<filename> —
   // intentionally outside the /api/v1 prefix (not a versioned API resource).

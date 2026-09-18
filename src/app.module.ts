@@ -27,6 +27,14 @@ import { FavoritesModule } from './modules/favorites/favorites.module';
 import { LoyaltyModule } from './modules/loyalty/loyalty.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { AdminNotificationsModule } from './modules/admin-notifications/admin-notifications.module';
+import { StaffModule } from './modules/staff/staff.module';
+import { DriversModule } from './modules/drivers/drivers.module';
+import { CustomersModule } from './modules/customers/customers.module';
+import { ReportsModule } from './modules/reports/reports.module';
+import { DeliveryPricingModule } from './modules/delivery-pricing/delivery-pricing.module';
+import { LocationsModule } from './modules/locations/locations.module';
+import { MenuOffersModule } from './modules/menu-offers/menu-offers.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
 import { JwtAccessGuard } from './common/guards/jwt-access.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -70,6 +78,12 @@ import { RolesGuard } from './common/guards/roles.guard';
                 'req.headers.cookie',
                 'req.body.password',
                 'req.body.refreshToken',
+                // FCM device tokens (POST /devices/register, PUT /devices/token) —
+                // never printed even truncated if request-body logging is ever
+                // enabled (defense in depth alongside the default pino-http
+                // serializer, which does not log req.body today).
+                'req.body.token',
+                'req.body.oldToken',
               ],
               remove: true,
             },
@@ -122,6 +136,14 @@ import { RolesGuard } from './common/guards/roles.guard';
     LoyaltyModule,
     UploadsModule,
     AdminNotificationsModule,
+    StaffModule,
+    DriversModule,
+    CustomersModule,
+    ReportsModule,
+    DeliveryPricingModule,
+    LocationsModule,
+    MenuOffersModule,
+    ReviewsModule,
   ],
   providers: [
     // Order matters: rate limiting first, then authenticate, then authorize.

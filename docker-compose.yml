@@ -48,6 +48,7 @@ services:
       # container rebuilds/restarts — must match UPLOAD_DIR (./uploads, i.e.
       # /app/uploads given the image's WORKDIR).
       - uploads:/app/uploads
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
     depends_on:
       db:
         condition: service_healthy

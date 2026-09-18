@@ -1,7 +1,17 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { Public } from '../../common/decorators/public.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { AuthService } from './auth.service';
@@ -10,6 +20,8 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { GuestDto } from './dto/guest.dto';
+import { GoogleAuthDto } from './dto/google-auth.dto';
+import { AppleAuthDto } from './dto/apple-auth.dto';
 import { AUTH_THROTTLE } from './auth-throttle.const';
 import { extractRequestMeta } from './request-meta.util';
 
@@ -51,11 +63,30 @@ export class AuthController {
     return this.authService.adminLogin(dto, extractRequestMeta(req));
   }
 
+  // Login endpoint (not authenticated) — same rate-limit class as /login.
+  // Identity is derived entirely from the verified Firebase ID token; no
+  // client-supplied field can influence the resolved account or its role.
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('google')
+  googleLogin(@Body() dto: GoogleAuthDto, @Req() req: Request) {
+    return this.authService.googleLogin(dto, extractRequestMeta(req));
+  }
+
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('apple')
+  appleLogin(@Body() dto: AppleAuthDto, @Req() req: Request) {
+    return this.authService.appleLogin(dto, extractRequestMeta(req));
+  }
+
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
   refresh(@Body() dto: RefreshDto, @Req() req: Request) {
-    return this.authService.refresh(dto.refreshToken, extractRequestMeta(req));
+    return this.authService.refresh(dto.refreshToken, extractRequestMeta(req), dto.deviceToken);
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -75,5 +106,24 @@ export class AuthController {
   @Post('guest')
   guest(@Body() dto: GuestDto, @Req() req: Request) {
     return this.authService.guest(dto, extractRequestMeta(req));
+  }
+
+  // Self-service account deletion. Requires an authenticated, non-guest
+  // CUSTOMER — the global JwtAccessGuard already rejects unauthenticated
+  // requests, @Roles('CUSTOMER') rejects ADMIN/CASHIER principals, and the
+  // isGuest check below rejects guest sessions. The target is always the
+  // caller's own id from the verified access token — never a request body
+  // or URL param — so this can never delete another account.
+  @Roles('CUSTOMER')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Delete('account')
+  async deleteAccount(@CurrentUser() user: AuthenticatedUser): Promise<void> {
+    if (user.isGuest) {
+      throw new ForbiddenException({
+        message: 'Guest accounts cannot be deleted through this endpoint',
+        code: 'GUEST_NOT_ELIGIBLE',
+      });
+    }
+    await this.authService.deleteAccount(user.id);
   }
 }

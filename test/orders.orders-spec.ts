@@ -7,8 +7,16 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { AuthService } from '../src/modules/auth/auth.service';
+import { GoogleRoutesService } from '../src/modules/delivery-pricing/google-routes.service';
 
 const D = (v: string) => new Prisma.Decimal(v);
+
+/** Distance-based delivery pricing always calls Google Routes server-side —
+ * automated tests must never call the real API, so every DELIVERY checkout
+ * here goes through this mock (5km -> first tier, non-zero fee). */
+const mockGoogleRoutesService = {
+  computeRoute: jest.fn().mockResolvedValue({ distanceMeters: 5_000, durationSeconds: 600 }),
+};
 
 describe('Orders & Checkout (integration)', () => {
   let app: INestApplication;
@@ -19,6 +27,7 @@ describe('Orders & Checkout (integration)', () => {
   let checkoutItem: { id: string };
   let cheapItem: { id: string };
   let optionsItem: { id: string; variantId: string; addonId: string };
+  let saleItem: { id: string };
 
   const cleanupUserIds: string[] = [];
   const deliveryAddress = {
@@ -27,6 +36,7 @@ describe('Orders & Checkout (integration)', () => {
     building: 'B1',
     city: 'Cairo',
   };
+  const deliveryAddressWithPin = { ...deliveryAddress, latitude: 30.0444, longitude: 31.2357 };
 
   async function registerUser() {
     const registered = await authService.register(
@@ -56,7 +66,10 @@ describe('Orders & Checkout (integration)', () => {
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(GoogleRoutesService)
+      .useValue(mockGoogleRoutesService)
+      .compile();
 
     app = moduleRef.createNestApplication();
     app.setGlobalPrefix('api');
@@ -142,6 +155,19 @@ describe('Orders & Checkout (integration)', () => {
       addonId: withOptions.addonGroups[0].addons[0].id,
     };
 
+    saleItem = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض',
+        nameEn: 'Sale Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('60.00'),
+        salePrice: D('45.00'),
+        imageUrl: 'https://example.test/img.png',
+      },
+    });
+
     await prisma.promoCode.createMany({
       data: [
         { code: 'PHASE5-VALID10', discountType: 'PERCENT', value: D('10') },
@@ -194,6 +220,10 @@ describe('Orders & Checkout (integration)', () => {
       expect(res.body.items).toHaveLength(1);
       expect(res.body.items[0].menuItem.nameEn).toBe('Checkout Item');
       expect(res.body.paymentMethod).toBe('cash');
+      // Order response contract (deliveryMethod/paymentStatus) — a PICKUP,
+      // freshly-checked-out order is PICKUP/PENDING.
+      expect(res.body.deliveryMethod).toBe('PICKUP');
+      expect(res.body.paymentStatus).toBe('PENDING');
 
       const cart = await request(app.getHttpServer())
         .get('/api/v1/cart')
@@ -426,6 +456,72 @@ describe('Orders & Checkout (integration)', () => {
   });
 
   // ===========================================================================
+  describe('Menu Item sale price (discount) — checkout & order snapshot', () => {
+    it('charges the salePrice at checkout and snapshots it on the OrderItem', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
+      expect(res.status).toBe(201);
+      expect(res.body.subtotal).toBe(90); // 45 (salePrice) * 2, not 60 * 2
+      expect(res.body.items[0].unitPrice).toBe(45);
+      expect(res.body.items[0].totalPrice).toBe(90);
+    });
+
+    it('applies a promo code on top of the already-discounted subtotal (no double discount, no bypass)', async () => {
+      const { accessToken } = await registerUser();
+      // quantity 2 -> subtotal 90 (>= the seeded 50.00 minimum order amount)
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH', promoCode: 'PHASE5-VALID10' });
+      expect(res.status).toBe(201);
+      expect(res.body.subtotal).toBe(90); // discounted item price (45) * 2, not 60 * 2 (120)
+      expect(res.body.discount).toBe(9); // 10% of the discounted subtotal (90), not of 120
+      expect(res.body.totalAmount).toBe(res.body.subtotal - res.body.discount + res.body.tax);
+    });
+
+    it('does not change an already-placed order when the MenuItem sale price is later changed or removed', async () => {
+      const { accessToken } = await registerUser();
+      // quantity 2 -> subtotal 90 (>= the seeded 50.00 minimum order amount)
+      await addToCart(accessToken, { menuItemId: saleItem.id, quantity: 2 });
+
+      const checkout = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
+      expect(checkout.status).toBe(201);
+      const orderId = checkout.body.id;
+      expect(checkout.body.items[0].unitPrice).toBe(45);
+      const originalTotal = checkout.body.totalAmount;
+
+      // Admin later removes the discount entirely and changes the base price.
+      await prisma.menuItem.update({
+        where: { id: saleItem.id },
+        data: { salePrice: null, basePrice: D('99.00') },
+      });
+
+      const reread = await request(app.getHttpServer())
+        .get(`/api/v1/orders/${orderId}`)
+        .set('Authorization', `Bearer ${accessToken}`);
+      expect(reread.status).toBe(200);
+      expect(reread.body.items[0].unitPrice).toBe(45); // unchanged snapshot
+      expect(reread.body.totalAmount).toBe(originalTotal);
+
+      // Restore the fixture for any tests that run after this one.
+      await prisma.menuItem.update({
+        where: { id: saleItem.id },
+        data: { salePrice: D('45.00'), basePrice: D('60.00') },
+      });
+    });
+  });
+
+  // ===========================================================================
   describe('Initial status history', () => {
     it('writes exactly one PENDING history entry at creation', async () => {
       const { accessToken } = await registerUser();
@@ -489,6 +585,10 @@ describe('Orders & Checkout (integration)', () => {
         .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
       expect(second.status).toBe(201);
       expect(second.body.id).toBe(first.body.id);
+      // The replayed response must carry the same order-response-contract
+      // fields as the original — not silently drop them on the replay path.
+      expect(second.body.deliveryMethod).toBe(first.body.deliveryMethod);
+      expect(second.body.paymentStatus).toBe(first.body.paymentStatus);
 
       const orderCount = await prisma.order.count({ where: { userId: user.id } });
       expect(orderCount).toBe(1);
@@ -582,7 +682,64 @@ describe('Orders & Checkout (integration)', () => {
       expect(res.body.code).toBe('DELIVERY_ADDRESS_REQUIRED');
     });
 
-    it('snapshots the provided address and charges the delivery fee for DELIVERY', async () => {
+    it('snapshots the provided address and charges the distance-based delivery fee for DELIVERY', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: deliveryAddressWithPin,
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.deliveryFee).toBeGreaterThan(0);
+      expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
+      expect(res.body.deliveryTier).toMatchObject({
+        minDistanceKm: '0.00',
+        maxDistanceKm: '15.00',
+      });
+      expect(res.body.deliveryDistanceMeters).toBe(5_000);
+      // Order response contract: a DELIVERY checkout must report
+      // deliveryMethod: 'DELIVERY' (never fall back to the client default).
+      expect(res.body.deliveryMethod).toBe('DELIVERY');
+      expect(res.body.paymentStatus).toBe('PENDING');
+    });
+
+    it('snapshots latitude/longitude from the checkout payload and exposes them as nullable on read (VO2.3)', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: deliveryAddressWithPin,
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.deliveryAddress).toMatchObject({
+        ...deliveryAddress,
+        latitude: 30.0444,
+        longitude: 31.2357,
+      });
+
+      // Editing the saved address afterwards must never change the
+      // already-created order's snapshot — there is no saved-Address FK on
+      // Order to begin with (deliveryAddressJson is a plain copy), so this
+      // just re-reads the order to confirm the coordinates persisted as-is.
+      const detail = await request(app.getHttpServer())
+        .get(`/api/v1/orders/${res.body.id}`)
+        .set('Authorization', `Bearer ${accessToken}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body.deliveryAddress.latitude).toBe(30.0444);
+      expect(detail.body.deliveryAddress.longitude).toBe(31.2357);
+    });
+
+    it('rejects a DELIVERY checkout when the payload omits latitude/longitude (distance pricing requires a pin)', async () => {
       const { accessToken } = await registerUser();
       await addToCart(accessToken, { menuItemId: checkoutItem.id });
 
@@ -590,9 +747,43 @@ describe('Orders & Checkout (integration)', () => {
         .post('/api/v1/checkout')
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ deliveryMethod: 'DELIVERY', paymentMethod: 'CASH', deliveryAddress });
-      expect(res.status).toBe(201);
-      expect(res.body.deliveryFee).toBeGreaterThan(0);
-      expect(res.body.deliveryAddress).toMatchObject(deliveryAddress);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('DELIVERY_COORDINATES_REQUIRED');
+    });
+
+    it('rejects an out-of-range latitude/longitude on checkout (VO2.3)', async () => {
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: { ...deliveryAddress, latitude: 999, longitude: 31.2357 },
+        });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a DELIVERY checkout beyond the deliverable range (OUTSIDE_DELIVERY_RANGE)', async () => {
+      mockGoogleRoutesService.computeRoute.mockResolvedValueOnce({
+        distanceMeters: 30_500,
+        durationSeconds: 2400,
+      });
+      const { accessToken } = await registerUser();
+      await addToCart(accessToken, { menuItemId: checkoutItem.id });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/checkout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          deliveryMethod: 'DELIVERY',
+          paymentMethod: 'CASH',
+          deliveryAddress: deliveryAddressWithPin,
+        });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('OUTSIDE_DELIVERY_RANGE');
     });
 
     it('zeroes the delivery fee and ignores address for PICKUP', async () => {
@@ -605,7 +796,8 @@ describe('Orders & Checkout (integration)', () => {
         .send({ deliveryMethod: 'PICKUP', paymentMethod: 'CASH' });
       expect(res.status).toBe(201);
       expect(res.body.deliveryFee).toBe(0);
-      expect(res.body.deliveryAddress).toMatchObject({ type: 'PICKUP' });
+      // PICKUP is untouched by VO2.3 — no latitude/longitude keys are added.
+      expect(res.body.deliveryAddress).toEqual({ type: 'PICKUP' });
     });
   });
 });

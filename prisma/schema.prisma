@@ -26,6 +26,15 @@ datasource db {
 enum UserRole {
   CUSTOMER
   ADMIN
+  CASHIER
+  /// Read-only order-ticket viewer — sees item-level order details only, no
+  /// customer PII, no payment info, no status-change permissions.
+  KITCHEN
+  /// Delivery driver (Phase 1). Admin-created only (no public registration).
+  /// Sees only orders explicitly assigned via Order.driverId, and only the
+  /// fields needed to fulfil a delivery — see DriverOrdersController /
+  /// toDriverOrderResponse.
+  DRIVER
 }
 
 enum OrderStatus {
@@ -33,7 +42,9 @@ enum OrderStatus {
   CONFIRMED
   PREPARING
   OUT_FOR_DELIVERY
+  READY_FOR_PICKUP
   DELIVERED
+  PICKED_UP
   CANCELLED
 }
 
@@ -50,7 +61,16 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  // Moyasar authorize-only hold (source.manual=true) — money is held on the
+  // card but not yet taken. Set only for CARD payments; COD/WALLET never use it.
+  AUTHORIZED
   PAID
+  // Admin accepted the order -> AUTHORIZED was captured. Distinct from PAID
+  // (which COD uses for "collected on delivery") so the two payment methods'
+  // terminal-success states never get confused with each other.
+  CAPTURED
+  // Admin rejected the order -> the AUTHORIZED hold was released, no money taken.
+  VOIDED
   FAILED
   REFUNDED
 }
@@ -87,6 +107,11 @@ enum CampaignStatus {
   FAILED
 }
 
+enum MenuItemBadge {
+  BESTSELLER
+  TOP_RATED
+}
+
 // ---------------------------------------------------------------------------
 // Identity & sessions (plan §2.1, §2.2)
 // ---------------------------------------------------------------------------
@@ -99,6 +124,10 @@ model User {
   // DSL cannot express `WHERE deletedAt IS NULL AND email IS NOT NULL`).
   email               String?
   passwordHash        String?
+  // External identity linkage for Firebase-authenticated sign-in (Google via
+  // Firebase Auth). Null for accounts that have never signed in with Google.
+  // Nullable + unique so at most one user can ever claim a given Firebase uid.
+  firebaseUid         String?   @unique
   fullName            String
   phone               String?
   avatarUrl           String?
@@ -110,16 +139,27 @@ model User {
   updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?
 
-  refreshTokens    RefreshToken[]
-  orders           Order[]
-  deviceTokens     DeviceToken[]
+  refreshTokens               RefreshToken[]
+  orders                      Order[]
+  deviceTokens                DeviceToken[]
   /// One active cart per user (Cart.userId is unique) — guest carts have userId = null.
-  cart             Cart?
-  statusChanges    OrderStatusHistory[]
-  createdCampaigns NotificationCampaign[]
-  addresses        Address[]
-  favorites        Favorite[]
-  loyaltyAccount   LoyaltyAccount?
+  cart                        Cart?
+  statusChanges               OrderStatusHistory[]
+  createdCampaigns            NotificationCampaign[]
+  addresses                   Address[]
+  favorites                   Favorite[]
+  loyaltyAccount              LoyaltyAccount?
+  savedCards                  SavedCard[]
+  itemReviews                 ItemReview[]
+  orderFeedbacks              OrderFeedback[]
+  /// Orders currently assigned to this DRIVER account. Distinct from `orders`
+  /// (the customer relation) — a driver is never the customer on its own
+  /// assigned orders.
+  assignedOrders              Order[]                        @relation("OrderDriver")
+  driverAssignmentsFrom       OrderDriverAssignmentHistory[] @relation("AssignmentHistoryFromDriver")
+  driverAssignmentsTo         OrderDriverAssignmentHistory[] @relation("AssignmentHistoryToDriver")
+  driverAssignmentChangesMade OrderDriverAssignmentHistory[] @relation("AssignmentHistoryChangedBy")
+  driverLocationSamples       OrderDriverLocation[]          @relation("OrderDriverLocationDriver")
 
   @@index([email])
   @@index([role])
@@ -168,30 +208,71 @@ model Category {
 
 /// Plan §2.5. Referenced by OrderItem only via a soft (non-FK) snapshot reference.
 model MenuItem {
-  id            String    @id @default(uuid()) @db.Uuid
-  categoryId    String    @db.Uuid
-  nameAr        String
-  nameEn        String
-  descriptionAr String    @db.Text
-  descriptionEn String    @db.Text
-  basePrice     Decimal   @db.Decimal(10, 2)
-  imageUrl      String?
-  isAvailable   Boolean   @default(true)
-  isPopular     Boolean   @default(false)
-  displayOrder  Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  deletedAt     DateTime?
+  id             String         @id @default(uuid()) @db.Uuid
+  categoryId     String         @db.Uuid
+  nameAr         String
+  nameEn         String
+  descriptionAr  String         @db.Text
+  descriptionEn  String         @db.Text
+  basePrice      Decimal        @db.Decimal(10, 2)
+  // Optional direct discount on this item — when set (and valid: > 0 and
+  // strictly less than basePrice, enforced in CatalogService), this is the
+  // ACTUAL price charged everywhere; basePrice itself is never overwritten
+  // and remains the permanent "original" price a sale reverts to when
+  // salePrice is cleared (set to null). PricingService.resolveMenuItemPrice
+  // is the single authoritative reader — every financial computation
+  // (cart/checkout/order snapshot) goes through it, never basePrice raw.
+  // Distinct from `compareAtPrice` below: that field is purely cosmetic (a
+  // "was" price never read by any pricing/financial code) and requires the
+  // admin to manually overwrite basePrice to run a sale, with no durable
+  // original price to auto-restore — not a substitute for this field.
+  salePrice      Decimal?       @db.Decimal(10, 2)
+  // Optional kcal value shown on the menu. No calculation/derivation — admin-entered only.
+  calories       Int?
+  // Previous/original display price for a discounted item; basePrice remains the
+  // actual charged price. No promotions engine or discount math reads this in this phase.
+  compareAtPrice Decimal?       @db.Decimal(10, 2)
+  imageUrl       String?
+  isAvailable    Boolean        @default(true)
+  isPopular      Boolean        @default(false)
+  // Manually set by the Admin; independent from isPopular. Null = no badge. Never inferred.
+  badge          MenuItemBadge?
+  displayOrder   Int?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deletedAt      DateTime?
 
-  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  variants    ItemVariant[]
-  addonGroups AddonGroup[]
-  cartItems   CartItem[]
-  favorites   Favorite[]
+  category           Category                 @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants           ItemVariant[]
+  addonGroups        AddonGroup[]
+  cartItems          CartItem[]
+  favorites          Favorite[]
+  recommendations    MenuItemRecommendation[] @relation("MenuItemRecommendations")
+  recommendedInLists MenuItemRecommendation[] @relation("RecommendedMenuItem")
+  menuOffers         MenuOffer[]
 
   @@index([categoryId])
   @@index([isAvailable])
   @@index([isPopular])
+}
+
+/// "Often Ordered With" — admin-curated recommendation from one MenuItem to
+/// another. Recommendations point to MenuItem only (no variant targeting), and
+/// carry no pricing/business logic in this phase — displayOrder just preserves
+/// the admin-curated ordering.
+model MenuItemRecommendation {
+  id                    String   @id @default(uuid()) @db.Uuid
+  menuItemId            String   @db.Uuid
+  recommendedMenuItemId String   @db.Uuid
+  displayOrder          Int      @default(0)
+  createdAt             DateTime @default(now())
+
+  menuItem            MenuItem @relation("MenuItemRecommendations", fields: [menuItemId], references: [id], onDelete: Cascade)
+  recommendedMenuItem MenuItem @relation("RecommendedMenuItem", fields: [recommendedMenuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, recommendedMenuItemId])
+  @@index([menuItemId, displayOrder])
+  @@index([recommendedMenuItemId])
 }
 
 /// Size/variant with a price delta. Plan §2.6.
@@ -249,6 +330,38 @@ model Addon {
   cartItemAddons CartItemAddon[]
 
   @@index([addonGroupId])
+}
+
+/// Admin-curated marketing banner linking to an existing MenuItem — image +
+/// optional schedule, no pricing/discount fields of its own (that's PromoCode's
+/// job, not this model's). Visual-only: Menu → Offer Banner → tap → the linked
+/// MenuItem's detail page. `imageUrl` is always a reference returned by the
+/// existing generic upload endpoint (POST /admin/uploads/image) — this model
+/// never stores image bytes. No `deletedAt` — unlike Category/MenuItem/PromoCode,
+/// this follows NotificationCampaign's convention (the closest existing
+/// marketing-content model with a real DELETE endpoint): hard delete, since an
+/// offer has no history/audit requirement once removed. `onDelete: Cascade`
+/// mirrors Favorite's MenuItem relation — safe because MenuItem is only ever
+/// soft-deleted via the admin API (deletedAt), so this cascade would only ever
+/// fire on a raw DB-level hard delete, never through the app itself.
+model MenuOffer {
+  id          String    @id @default(uuid()) @db.Uuid
+  menuItemId  String    @db.Uuid
+  imageUrl    String
+  title       String?
+  description String?   @db.Text
+  isActive    Boolean   @default(true)
+  // Scheduling window — both null means "always visible" (subject to isActive).
+  startAt     DateTime?
+  endAt       DateTime?
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([menuItemId])
+  @@index([isActive, sortOrder])
 }
 
 // ---------------------------------------------------------------------------
@@ -336,38 +449,99 @@ model CartItemAddon {
 
 /// Plan §2.11. Never hard-deleted.
 model Order {
-  id                    String         @id @default(uuid()) @db.Uuid
-  orderNumber           String         @unique
-  userId                String         @db.Uuid
-  status                OrderStatus    @default(PENDING)
-  subtotal              Decimal        @db.Decimal(10, 2)
-  deliveryFee           Decimal        @db.Decimal(10, 2)
-  tax                   Decimal        @db.Decimal(10, 2)
-  discount              Decimal        @db.Decimal(10, 2)
-  totalAmount           Decimal        @db.Decimal(10, 2)
-  deliveryMethod        DeliveryMethod
-  paymentMethod         PaymentMethod
-  paymentStatus         PaymentStatus  @default(PENDING)
-  appliedPromoId        String?        @db.Uuid
-  promoCodeSnapshot     String?
+  id                         String         @id @default(uuid()) @db.Uuid
+  orderNumber                String         @unique
+  userId                     String         @db.Uuid
+  status                     OrderStatus    @default(PENDING)
+  subtotal                   Decimal        @db.Decimal(10, 2)
+  deliveryFee                Decimal        @db.Decimal(10, 2)
+  tax                        Decimal        @db.Decimal(10, 2)
+  discount                   Decimal        @db.Decimal(10, 2)
+  totalAmount                Decimal        @db.Decimal(10, 2)
+  deliveryMethod             DeliveryMethod
+  paymentMethod              PaymentMethod
+  paymentStatus              PaymentStatus  @default(PENDING)
+  appliedPromoId             String?        @db.Uuid
+  promoCodeSnapshot          String?
   // Address snapshot at checkout time — decouples the order from later edits/
   // deletes of the customer's saved addresses (Address entity is Phase 2+).
-  deliveryAddressJson   Json
-  estimatedDeliveryTime DateTime?
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
-  cancelledAt           DateTime?
-  cancelReason          String?
+  deliveryAddressJson        Json
+  // DEPRECATED (superseded by the distance-pricing snapshot columns below) —
+  // always null on orders placed after the distance-pricing migration. Kept,
+  // unused by any active code path, only so orders placed under the old
+  // zone-based system keep reading back correctly. `deliveryFee` above
+  // already holds the authoritative fee snapshot for those old orders (the
+  // zone's fee at order time, or 0 for pickup); these two columns snapshot
+  // only the zone's bilingual name so history stays readable if the zone is
+  // later renamed/deactivated. Mirrors the promoCodeSnapshot convention above.
+  deliveryZoneId             String?        @db.Uuid
+  deliveryZoneNameArSnapshot String?
+  deliveryZoneNameEnSnapshot String?
+  // Distance-based delivery pricing snapshot — set for DELIVERY orders only
+  // (null for PICKUP and for orders placed before this migration).
+  // `deliveryTierId` is a soft reference (plain UUID, no FK — same
+  // convention as OrderItem.menuItemId) so a later admin edit/deactivation
+  // of the tier never changes what an existing order reports; the min/max
+  // snapshot columns are the actual authoritative record of which tier
+  // applied. `deliveryFee` above remains the authoritative fee amount.
+  deliveryDistanceMeters     Int?
+  deliveryDurationSeconds    Int?
+  deliveryTierId             String?        @db.Uuid
+  deliveryTierMinKmSnapshot  Decimal?       @db.Decimal(5, 2)
+  deliveryTierMaxKmSnapshot  Decimal?       @db.Decimal(5, 2)
+  estimatedDeliveryTime      DateTime?
+  // Manual kitchen prep time (Manual Kitchen Preparation Time / ETA feature)
+  // — the most recently selected minutes-to-ready a KITCHEN/ADMIN user chose
+  // via PATCH /kitchen/orders/:id/preparation-time. Independent of `status`:
+  // setting this never itself moves the order through the status-transition
+  // map (see OrdersService.setPreparationTime). Null until first set.
+  preparationTimeMinutes     Int?
+  // Driver assignment (Phase 1 of the delivery-driver system). Optional so
+  // every pre-existing order (and every PICKUP order, which is never
+  // assigned) remains valid. Set/cleared only by OrdersService.assignDriver
+  // (ADMIN-only) — never touched by checkout or any status transition.
+  // Deliberately NOT cleared when the driver account is later deactivated:
+  // the assignment (and its history) must survive so an admin can see who
+  // it was assigned to and reassign it — see OrdersService.assignDriver /
+  // StaffModule-style deactivation via `deletedAt`.
+  driverId                   String?        @db.Uuid
+  // Bumped by exactly 1 every time OrdersService.assignDriver actually
+  // changes `driverId` (assign, reassign, or unassign — never on a no-op
+  // re-assignment of the same driver, which intentionally leaves this
+  // untouched). This is the "assignment identity" a driver's location
+  // upload must be tagged with (Phase 2 live tracking): it is what lets the
+  // system reject a delayed location sample from an obsolete assignment,
+  // including one from the SAME driver re-assigned after being unassigned —
+  // a plain `driverId` equality check alone cannot distinguish "still the
+  // original assignment" from "reassigned back to the same driver", but a
+  // monotonically-incrementing version can. See OrderDriverLocation.
+  driverAssignmentVersion    Int            @default(0)
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  cancelledAt                DateTime?
+  cancelReason               String?
 
-  user          User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
-  appliedPromo  PromoCode?           @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
-  items         OrderItem[]
-  statusHistory OrderStatusHistory[]
-  payments      Payment[]
+  user                    User                           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  appliedPromo            PromoCode?                     @relation(fields: [appliedPromoId], references: [id], onDelete: SetNull)
+  deliveryZone            DeliveryZone?                  @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  /// The assigned driver — distinct relation from `user` (the customer).
+  driver                  User?                          @relation("OrderDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  items                   OrderItem[]
+  statusHistory           OrderStatusHistory[]
+  payments                Payment[]
+  itemReviews             ItemReview[]
+  orderFeedback           OrderFeedback?
+  driverAssignmentHistory OrderDriverAssignmentHistory[]
+  /// Latest known GPS sample for this order's CURRENT driver assignment
+  /// (Phase 2 live tracking) — null until the newly assigned driver submits
+  /// their first location. See OrderDriverLocation's own doc comment.
+  driverLocation          OrderDriverLocation?
 
   @@index([userId])
   @@index([status])
   @@index([createdAt])
+  @@index([deliveryZoneId])
+  @@index([driverId])
 }
 
 /// Plan §2.12. Snapshot row — no updatedAt (immutable once created).
@@ -388,8 +562,10 @@ model OrderItem {
 
   order          Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   customizations OrderItemCustomization[]
+  review         ItemReview?
 
   @@index([orderId])
+  @@index([menuItemId])
 }
 
 /// Immutable snapshot of a chosen variant/addon at order time. Plan §2.13.
@@ -425,11 +601,70 @@ model OrderStatusHistory {
   @@index([orderId])
 }
 
+/// Audit trail for driver-assignment changes on a DELIVERY order — mirrors
+/// OrderStatusHistory's conventions (order + from/to + actor + timestamp) but
+/// tracks the driver relation instead of order status. `fromDriverId` is null
+/// for the initial assignment; `toDriverId` is null for an unassign.
+/// `changedByUserId` is always the ADMIN who made the change (assignment is
+/// never driver- or customer-initiated).
+model OrderDriverAssignmentHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  orderId         String   @db.Uuid
+  fromDriverId    String?  @db.Uuid
+  toDriverId      String?  @db.Uuid
+  changedByUserId String   @db.Uuid
+  createdAt       DateTime @default(now())
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromDriver    User? @relation("AssignmentHistoryFromDriver", fields: [fromDriverId], references: [id], onDelete: SetNull)
+  toDriver      User? @relation("AssignmentHistoryToDriver", fields: [toDriverId], references: [id], onDelete: SetNull)
+  changedByUser User  @relation("AssignmentHistoryChangedBy", fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([toDriverId])
+}
+
+/// Phase 2 live tracking — the SINGLE latest GPS sample for an order's
+/// current driver assignment. `orderId` is the primary key (not a separate
+/// uuid): this is a deliberate latest-only "current state" row, upserted in
+/// place on every valid update, NEVER an appended breadcrumb/history table
+/// (see DRIVER_DELIVERY_API_CONTRACT.md's Phase 2 tracking-lifecycle
+/// section). `assignmentVersion` is a copy of `Order.driverAssignmentVersion`
+/// as of the moment this sample was accepted — DriverLocationService compares
+/// it against the order's LIVE `driverAssignmentVersion` on every read, so a
+/// sample left behind by a reassigned-away (or reassigned-then-reassigned-
+/// back) driver can never resurface as if it were current, even before the
+/// row is physically cleaned up (see DriverLocationCleanupService).
+/// `capturedAt` (client-reported GPS fix time) is intentionally distinct from
+/// `receivedAt` (server receipt time, `@default(now())`) — DriverLocationService
+/// uses `capturedAt` both for staleness/freshness derivation and to reject an
+/// out-of-order/delayed sample from overwriting a newer one already stored
+/// for the same assignment.
+model OrderDriverLocation {
+  orderId           String   @id @db.Uuid
+  driverId          String   @db.Uuid
+  assignmentVersion Int
+  latitude          Decimal  @db.Decimal(9, 6)
+  longitude         Decimal  @db.Decimal(9, 6)
+  accuracyMeters    Decimal? @db.Decimal(7, 2)
+  headingDegrees    Decimal? @db.Decimal(5, 2)
+  speedMps          Decimal? @db.Decimal(6, 2)
+  capturedAt        DateTime
+  receivedAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  order  Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver User  @relation("OrderDriverLocationDriver", fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId])
+}
+
 // ---------------------------------------------------------------------------
 // Payments (plan §2.14)
 // ---------------------------------------------------------------------------
 
-/// Gateway-agnostic payment record. Plan §2.14. No gateway integration in Phase 1.
+/// Gateway-agnostic payment record. Plan §2.14. Moyasar (CARD) adds the
+/// authorize/capture/void fields below; COD (CASH) never sets them.
 model Payment {
   id             String        @id @default(uuid()) @db.Uuid
   orderId        String        @db.Uuid
@@ -441,13 +676,49 @@ model Payment {
   providerRef    String?
   idempotencyKey String        @unique
   rawWebhookJson Json?
+  // Set when Moyasar reports `authorized` (the initial card hold), `captured`
+  // (admin accepted), or `voided` (admin rejected) respectively — mirrors
+  // `status` for auditability even after later transitions overwrite `status`.
+  authorizedAt   DateTime?
+  capturedAt     DateTime?
+  voidedAt       DateTime?
+  // Which saved card (if any) this payment was made/authorized with — set
+  // only when the customer paid via a stored token, never for a fresh card.
+  savedCardId    String?       @db.Uuid
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  savedCard SavedCard? @relation(fields: [savedCardId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
   @@index([providerRef])
+  @@index([savedCardId])
+}
+
+/// A tokenized card on file (Moyasar tokenization — plan Moyasar-integration
+/// §9). Never stores raw PAN/CVV: `token` is the Moyasar-issued token id,
+/// everything else is display-only metadata mirrored from Moyasar's token
+/// object at save time.
+model SavedCard {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  provider  String // "moyasar" — mirrors Payment.provider's convention
+  token     String    @unique
+  brand     String // visa | mastercard | mada | ...
+  lastFour  String
+  expMonth  Int
+  expYear   Int
+  status    String // mirrors the Moyasar token status (active | inactive | initiated)
+  isDefault Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -478,19 +749,108 @@ model DeviceToken {
 /// Single authoritative source for delivery fee, tax rate, min order. Plan §2.19.
 /// Singleton enforced via the unique `singleton` marker column (always `true`),
 /// which Postgres allows at most one row to satisfy.
+///
+/// Phase 8: restaurantName/addressText (single-language) were split into
+/// Ar/En pairs to match every other bilingual model in this schema
+/// (Category, MenuItem, ...) — the migration backfills both from the prior
+/// single value, so no data is lost. `workingHours` keeps its column/JSON
+/// key name but its shape changed from a single `{open,close}` pair to a
+/// 7-entry per-day array (see WorkingHoursDayDto) — the migration backfills
+/// every day from the prior single pair with `isOpen: true`, preserving the
+/// restaurant's prior effective hours. `deliveryFee`/`minOrderAmount` remain
+/// the store-wide defaults/floor (still enforced for every order regardless
+/// of fulfillment type); for DELIVERY orders the authoritative per-order fee
+/// now comes from distance-based pricing (see DeliveryDistanceTier /
+/// DeliveryPricingService) — `deliveryFee` is no longer read for DELIVERY
+/// pricing, but is kept since it still gates PICKUP's store-wide minimum
+/// and remains a reasonable fallback/default.
+///
+/// `restaurantLatitude`/`restaurantLongitude` (distance-pricing migration):
+/// the single authoritative origin used for every Google Routes distance
+/// calculation — never hardcoded in a service. NOT NULL: checkout for
+/// DELIVERY orders cannot function without a real origin. Decimal(10,7)
+/// (7 fractional digits, not Address's 6) deliberately — the approved
+/// production coordinates (21.5705641 / 39.1681808) carry 7 fractional
+/// digits and must round-trip exactly, not get silently truncated.
 model RestaurantSettings {
-  id                String   @id @default(uuid()) @db.Uuid
-  singleton         Boolean  @unique @default(true)
-  restaurantName    String
-  phone             String
-  addressText       String
-  taxRatePercent    Decimal  @db.Decimal(10, 2)
-  deliveryFee       Decimal  @db.Decimal(10, 2)
-  minOrderAmount    Decimal  @db.Decimal(10, 2)
-  currency          String
-  workingHours      Json
-  isMaintenanceMode Boolean  @default(false)
-  updatedAt         DateTime @updatedAt
+  id                  String   @id @default(uuid()) @db.Uuid
+  singleton           Boolean  @unique @default(true)
+  restaurantNameAr    String
+  restaurantNameEn    String
+  logoUrl             String?
+  phone               String
+  addressAr           String
+  addressEn           String
+  taxRatePercent      Decimal  @db.Decimal(10, 2)
+  deliveryFee         Decimal  @db.Decimal(10, 2)
+  minOrderAmount      Decimal  @db.Decimal(10, 2)
+  currency            String
+  /// 7-entry array: [{ dayOfWeek: 0-6, isOpen: boolean, openTime: "HH:MM"|null, closeTime: "HH:MM"|null }].
+  /// Informational/display only — see `acceptingOrders` for the actual
+  /// checkout gate; hours do not themselves open/close order acceptance.
+  workingHours        Json
+  /// IANA timezone the working-hours times above are expressed in. Never
+  /// inferred from the server's local timezone. Default is this
+  /// restaurant's actual location (Jeddah, Saudi Arabia).
+  timezone            String   @default("Asia/Riyadh")
+  /// Manual checkout gate (plan Phase 8). When false, checkout rejects new
+  /// orders with RESTAURANT_NOT_ACCEPTING_ORDERS regardless of workingHours —
+  /// this project does not auto-derive acceptance from hours.
+  acceptingOrders     Boolean  @default(true)
+  closedMessageAr     String?
+  closedMessageEn     String?
+  isMaintenanceMode   Boolean  @default(false)
+  restaurantLatitude  Decimal  @db.Decimal(10, 7)
+  restaurantLongitude Decimal  @db.Decimal(10, 7)
+  updatedAt           DateTime @updatedAt
+}
+
+/// DEPRECATED — superseded by DeliveryDistanceTier / DeliveryPricingService.
+/// No longer read by any active code path (checkout, pricing, admin APIs are
+/// all gone); the table and its FK from Order are kept only so historical
+/// orders placed before the distance-pricing migration keep reading back
+/// correctly via Order.deliveryZoneId / deliveryZoneName{Ar,En}Snapshot.
+/// Do not add new writers of this model.
+model DeliveryZone {
+  id           String    @id @default(uuid()) @db.Uuid
+  nameAr       String
+  nameEn       String
+  deliveryFee  Decimal   @db.Decimal(10, 2)
+  minimumOrder Decimal   @db.Decimal(10, 2)
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  orders Order[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// ADMIN-managed distance-based delivery pricing tier — the authoritative
+/// source for a DELIVERY order's fee, keyed by actual driving distance
+/// (Google Routes API `distanceMeters`) from RestaurantSettings' coordinates
+/// to the customer's delivery pin. Interval semantics: `minDistanceKm` is
+/// inclusive; `maxDistanceKm` is exclusive, EXCEPT for the active tier with
+/// the greatest `maxDistanceKm` (the "final" tier), which is inclusive on
+/// its max — see DeliveryPricingService.matchTier, which resolves this off
+/// whole-meter integers (never float km comparisons) to avoid boundary
+/// errors. No soft-delete: tiers are never referenced by FK (Order only
+/// keeps a soft `deliveryTierId` + a min/max snapshot), so `isActive` is
+/// sufficient for admin deactivation.
+model DeliveryDistanceTier {
+  id            String   @id @default(uuid()) @db.Uuid
+  minDistanceKm Decimal  @db.Decimal(5, 2)
+  maxDistanceKm Decimal  @db.Decimal(5, 2)
+  deliveryFee   Decimal  @db.Decimal(10, 2)
+  minimumOrder  Decimal  @default(0) @db.Decimal(10, 2)
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
 }
 
 // ---------------------------------------------------------------------------
@@ -640,5 +1000,60 @@ model AdminNotification {
   updatedAt    DateTime @updatedAt
 
   @@index([isRead])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Ratings & Reviews.
+// ---------------------------------------------------------------------------
+
+/// A customer's rating/comment for one purchased OrderItem. `orderItemId` is
+/// unique — this is both the "one review per purchased line" business rule
+/// and the authoritative race guard (ReviewsService catches the resulting
+/// P2002 and converts it into a 409). `menuItemId` is a soft reference (plain
+/// UUID, no FK) — same convention as OrderItem.menuItemId — snapshotted from
+/// the reviewed OrderItem at creation time, so a later MenuItem soft-delete
+/// never invalidates or orphans an existing review. `userId`/`orderId` use
+/// the same onDelete convention as Order's own FKs (Restrict/Cascade) since
+/// orders (and therefore their reviews) are never hard-deleted in practice.
+model ItemReview {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  orderId     String   @db.Uuid
+  orderItemId String   @unique @db.Uuid
+  menuItemId  String?  @db.Uuid
+  rating      Int
+  comment     String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([orderId])
+  @@index([menuItemId])
+  @@index([rating])
+  @@index([createdAt])
+}
+
+/// Optional overall order-experience rating/comment — stored separately from
+/// per-item ItemReview rows. `orderId` unique enforces "one OrderFeedback per
+/// order" at the DB level (authoritative race guard, same pattern as above).
+model OrderFeedback {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  orderId   String   @unique @db.Uuid
+  rating    Int
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([rating])
   @@index([createdAt])
 }

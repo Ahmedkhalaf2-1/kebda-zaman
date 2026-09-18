@@ -5,19 +5,23 @@ import { PaymentProviderRegistry } from './payment-provider.registry';
 import { PAYMENT_PROVIDERS, PaymentProvider } from './payment-provider.interface';
 import { CashOnDeliveryProvider } from './providers/cash.provider';
 import { UnconfiguredGatewayProvider } from './providers/unconfigured.provider';
+import { MoyasarProvider } from './providers/moyasar.provider';
+import { MoyasarClientService } from './moyasar/moyasar-client.service';
 
 @Module({
   controllers: [PaymentsController],
   providers: [
     CashOnDeliveryProvider,
+    MoyasarClientService,
+    MoyasarProvider,
     {
       provide: PAYMENT_PROVIDERS,
-      useFactory: (cash: CashOnDeliveryProvider): PaymentProvider[] => [
+      useFactory: (cash: CashOnDeliveryProvider, moyasar: MoyasarProvider): PaymentProvider[] => [
         cash,
-        new UnconfiguredGatewayProvider('CARD'),
+        moyasar,
         new UnconfiguredGatewayProvider('WALLET'),
       ],
-      inject: [CashOnDeliveryProvider],
+      inject: [CashOnDeliveryProvider, MoyasarProvider],
     },
     PaymentProviderRegistry,
     PaymentsService,

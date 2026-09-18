@@ -20,6 +20,8 @@ describe('Cart & Pricing (integration)', () => {
   let categoryId: string;
   let simpleItem: { id: string };
   let roundingItem: { id: string };
+  let saleItem: { id: string };
+  let saleItemWithVariant: { id: string; variantId: string };
   let itemWithOptions: {
     id: string;
     variantSmall: string;
@@ -42,6 +44,7 @@ describe('Cart & Pricing (integration)', () => {
   };
 
   let accessToken: string;
+  let userId: string;
   const cleanupUserIds: string[] = [];
 
   beforeAll(async () => {
@@ -90,6 +93,45 @@ describe('Cart & Pricing (integration)', () => {
         imageUrl: 'https://example.test/img.png',
       },
     });
+
+    saleItem = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض',
+        nameEn: 'Sale Item',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('40.00'),
+        salePrice: D('25.00'),
+        imageUrl: 'https://example.test/img.png',
+      },
+    });
+
+    const saleWithVariant = await prisma.menuItem.create({
+      data: {
+        categoryId,
+        nameAr: 'صنف مخفض بخيار',
+        nameEn: 'Sale Item With Variant',
+        descriptionAr: 'وصف',
+        descriptionEn: 'description',
+        basePrice: D('50.00'),
+        salePrice: D('30.00'),
+        imageUrl: 'https://example.test/img.png',
+        variants: {
+          create: [
+            {
+              nameAr: 'كبير',
+              nameEn: 'Large',
+              priceDelta: D('10.00'),
+              isDefault: true,
+              isActive: true,
+            },
+          ],
+        },
+      },
+      include: { variants: true },
+    });
+    saleItemWithVariant = { id: saleWithVariant.id, variantId: saleWithVariant.variants[0].id };
 
     unavailableItem = await prisma.menuItem.create({
       data: {
@@ -241,6 +283,7 @@ describe('Cart & Pricing (integration)', () => {
       {},
     );
     accessToken = registered.accessToken;
+    userId = registered.user.id;
     cleanupUserIds.push(registered.user.id);
   });
 
@@ -368,17 +411,59 @@ describe('Cart & Pricing (integration)', () => {
   });
 
   // ===========================================================================
+  describe('PricingService.priceLines — salePrice (Menu Item discount)', () => {
+    it('charges the salePrice instead of basePrice for a discounted item', async () => {
+      const { lines, subtotal } = await pricingService.priceLines([
+        { menuItemId: saleItem.id, addonIds: [], quantity: 1 },
+      ]);
+      expect(lines[0].unitPrice.toString()).toBe('25'); // salePrice, not basePrice (40)
+      expect(subtotal.toString()).toBe('25');
+    });
+
+    it('multiplies the discounted unit price by quantity for the line total', async () => {
+      const { lines } = await pricingService.priceLines([
+        { menuItemId: saleItem.id, addonIds: [], quantity: 3 },
+      ]);
+      expect(lines[0].lineTotal.toString()).toBe('75'); // 25 * 3
+    });
+
+    it('layers variant/addon deltas on top of salePrice, never discounting the delta itself', async () => {
+      const { lines } = await pricingService.priceLines([
+        {
+          menuItemId: saleItemWithVariant.id,
+          variantId: saleItemWithVariant.variantId,
+          addonIds: [],
+          quantity: 1,
+        },
+      ]);
+      // salePrice (30) + variant delta (10) = 40 — the delta is untouched by the discount.
+      expect(lines[0].unitPrice.toString()).toBe('40');
+    });
+
+    it('charges basePrice as before for an item with no salePrice (non-discounted items unaffected)', async () => {
+      const { lines } = await pricingService.priceLines([
+        { menuItemId: simpleItem.id, addonIds: [], quantity: 1 },
+      ]);
+      expect(lines[0].unitPrice.toString()).toBe('42');
+    });
+  });
+
+  // ===========================================================================
   describe('PricingService.evaluatePromo', () => {
     it('computes a PERCENT discount', async () => {
-      const { discount } = await pricingService.evaluatePromo(promoCodes.percent10, D('100.00'));
+      const { discount } = await pricingService.evaluatePromo(
+        promoCodes.percent10,
+        D('100.00'),
+        userId,
+      );
       expect(discount.toString()).toBe('10');
     });
 
     it('computes a FIXED discount, capped at the subtotal', async () => {
-      const full = await pricingService.evaluatePromo(promoCodes.fixed20, D('100.00'));
+      const full = await pricingService.evaluatePromo(promoCodes.fixed20, D('100.00'), userId);
       expect(full.discount.toString()).toBe('20');
 
-      const capped = await pricingService.evaluatePromo(promoCodes.fixed20, D('5.00'));
+      const capped = await pricingService.evaluatePromo(promoCodes.fixed20, D('5.00'), userId);
       expect(capped.discount.toString()).toBe('5'); // min(20, 5)
     });
 
@@ -386,6 +471,7 @@ describe('Cart & Pricing (integration)', () => {
       const { discount } = await pricingService.evaluatePromo(
         promoCodes.percentCapped,
         D('100.00'),
+        userId,
       );
       // 50% of 100 = 50, capped at 20
       expect(discount.toString()).toBe('20');
@@ -393,25 +479,25 @@ describe('Cart & Pricing (integration)', () => {
 
     it('rejects an expired promo', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.expired, D('100.00')),
+        pricingService.evaluatePromo(promoCodes.expired, D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_EXPIRED' } });
     });
 
     it('rejects a promo below its minimum order amount', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.minOrder, D('10.00')),
+        pricingService.evaluatePromo(promoCodes.minOrder, D('10.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_MIN_ORDER' } });
     });
 
     it('rejects an inactive promo', async () => {
       await expect(
-        pricingService.evaluatePromo(promoCodes.inactive, D('100.00')),
+        pricingService.evaluatePromo(promoCodes.inactive, D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_INVALID' } });
     });
 
     it('rejects an unknown promo code', async () => {
       await expect(
-        pricingService.evaluatePromo('THIS-CODE-DOES-NOT-EXIST', D('100.00')),
+        pricingService.evaluatePromo('THIS-CODE-DOES-NOT-EXIST', D('100.00'), userId),
       ).rejects.toMatchObject({ response: { code: 'PROMO_NOT_FOUND' } });
     });
   });
@@ -426,6 +512,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: roundingItem.id, addonIds: [], quantity: 1 }],
         settings,
         'DELIVERY',
+        undefined,
+        undefined,
+        userId,
       );
       // subtotal 10.10 * 14% = 1.414 -> rounds to 1.41
       expect(result.subtotal.toString()).toBe('10.1');
@@ -440,6 +529,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: simpleItem.id, addonIds: [], quantity: 1 }],
         settings,
         'DELIVERY',
+        undefined,
+        undefined,
+        userId,
       );
       expect(result.deliveryFee.toString()).toBe(settings.deliveryFee.toString());
     });
@@ -452,6 +544,9 @@ describe('Cart & Pricing (integration)', () => {
         [{ menuItemId: simpleItem.id, addonIds: [], quantity: 1 }],
         settings,
         'PICKUP',
+        undefined,
+        undefined,
+        userId,
       );
       expect(result.deliveryFee.toString()).toBe('0');
     });
@@ -465,6 +560,8 @@ describe('Cart & Pricing (integration)', () => {
         settings,
         'DELIVERY',
         promoCodes.percent10,
+        undefined,
+        userId,
       );
       // subtotal 42, discount 4.2, discountedSubtotal 37.8, tax = round(37.8*0.14,2)=5.29, delivery=settings
       const expectedDiscounted = D('42.00').minus('4.2');
@@ -546,6 +643,26 @@ describe('Cart & Pricing (integration)', () => {
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ menuItemId: unavailableItem.id, quantity: 1 });
       expect(unavailable.status).toBe(404);
+    });
+
+    it('adds a discounted item and charges/exposes the salePrice, not basePrice', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/cart/items')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ menuItemId: saleItem.id, quantity: 2 });
+      expect(res.status).toBe(201);
+      const item = res.body.items.find(
+        (i: { menuItem: { id: string } }) => i.menuItem.id === saleItem.id,
+      );
+      expect(item.menuItem.basePrice).toBe(40); // original price still reported
+      expect(item.menuItem.salePrice).toBe(25); // discount reported alongside it
+      expect(item.unitPrice).toBe(25); // charged price is the sale price
+      expect(item.totalPrice).toBe(50); // 25 * 2
+
+      // Clean up so it doesn't affect the item-count-sensitive tests below.
+      await request(app.getHttpServer())
+        .delete(`/api/v1/cart/items/${item.id}`)
+        .set('Authorization', `Bearer ${accessToken}`);
     });
 
     it('PUT /cart/items/:id updates quantity and recomputes totalPrice', async () => {

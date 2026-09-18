@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { DeliveryMethod, Prisma, PromoCode, RestaurantSettings } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -55,6 +60,34 @@ export interface FullPriceBreakdown {
 
 function round2(value: Prisma.Decimal): Prisma.Decimal {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+}
+
+/**
+ * The single authoritative "what does this item actually cost" reader — every
+ * financial computation (cart line pricing, checkout, order snapshots) must
+ * go through this rather than reading `menuItem.basePrice` directly, so a
+ * discount can never be duplicated or missed in some other code path.
+ *
+ * `salePrice` overrides `basePrice` only when it is currently valid (> 0 and
+ * strictly less than basePrice) — re-checked here, not just trusted from the
+ * DB, even though CatalogService already enforces this at write time: if a
+ * row is ever in an inconsistent state (e.g. a future data migration bug),
+ * this fails safe by falling back to basePrice rather than risking an
+ * under/overcharge. `basePrice` itself is never touched by a discount — this
+ * is a pure read, applied on top of the item, before any variant/addon delta.
+ */
+export function resolveMenuItemPrice(menuItem: {
+  basePrice: Prisma.Decimal;
+  salePrice: Prisma.Decimal | null;
+}): Prisma.Decimal {
+  if (
+    menuItem.salePrice !== null &&
+    menuItem.salePrice.greaterThan(0) &&
+    menuItem.salePrice.lessThan(menuItem.basePrice)
+  ) {
+    return menuItem.salePrice;
+  }
+  return menuItem.basePrice;
 }
 
 /**
@@ -152,7 +185,7 @@ export class PricingService {
     const addons = this.resolveAddons(menuItem, input.addonIds ?? []);
 
     const unitPrice = round2(
-      menuItem.basePrice
+      resolveMenuItemPrice(menuItem)
         .plus(variant?.priceDelta ?? 0)
         .plus(addons.reduce((sum, addon) => sum.plus(addon.price), new Prisma.Decimal(0))),
     );
@@ -220,8 +253,20 @@ export class PricingService {
     return selected.map((entry) => entry.addon);
   }
 
-  async evaluatePromo(code: string, subtotal: Prisma.Decimal): Promise<PromoEvaluation> {
-    const promo = await this.prisma.promoCode.findFirst({
+  /**
+   * The single choke point for promo eligibility (per-user limit included) —
+   * called from cart apply-promo, POST /promos/validate, the pre-transaction
+   * checkout pricing pass, and again from inside the checkout transaction
+   * (passing `tx`) so a race between two concurrent checkouts is caught by a
+   * fresh, transaction-scoped read rather than the earlier pricing pass.
+   */
+  async evaluatePromo(
+    code: string,
+    subtotal: Prisma.Decimal,
+    userId: string,
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<PromoEvaluation> {
+    const promo = await client.promoCode.findFirst({
       where: { code: code.trim().toUpperCase(), deletedAt: null },
     });
     if (!promo) {
@@ -247,6 +292,22 @@ export class PricingService {
         code: 'PROMO_INVALID',
       });
     }
+
+    // Per-user limit (null defaults to 1 — an unconfigured promo is
+    // one-use-per-customer with no DB backfill needed). Counts every Order
+    // ever created against this user+promo regardless of its later status,
+    // so cancelling an order never restores eligibility.
+    const effectivePerUserLimit = promo.perUserLimit ?? 1;
+    const previousUsageCount = await client.order.count({
+      where: { userId, appliedPromoId: promo.id },
+    });
+    if (previousUsageCount >= effectivePerUserLimit) {
+      throw new ConflictException({
+        message: 'You have already used this promo code',
+        code: 'PROMO_ALREADY_USED',
+      });
+    }
+
     if (promo.minOrderAmount && subtotal.lessThan(promo.minOrderAmount)) {
       throw new UnprocessableEntityException({
         message: `Minimum order amount of ${promo.minOrderAmount.toString()} not met`,
@@ -272,25 +333,37 @@ export class PricingService {
    * checkout (Phase 5). Not yet wired to any Phase 4 HTTP endpoint: the Cart
    * view has no deliveryMethod (that's chosen at checkout), so cart responses
    * only surface flat settings.deliveryFee/taxRatePercent (see CartService).
+   *
+   * `deliveryFeeOverride` (distance-pricing migration): for a DELIVERY order,
+   * OrdersService resolves this from the matched DeliveryDistanceTier and it
+   * is authoritative, overriding `settings.deliveryFee` — callers that don't
+   * pass one (direct unit tests, or any future non-distance delivery
+   * context) keep the prior flat-fee fallback behavior unchanged. This
+   * service deliberately knows nothing about DeliveryDistanceTier/Google
+   * Routes — it only ever takes a resolved Decimal.
    */
   async priceCart(
     inputs: CartLineInput[],
     settings: RestaurantSettings,
     deliveryMethod: DeliveryMethod,
-    promoCode?: string | null,
+    promoCode: string | null | undefined,
+    deliveryFeeOverride: Prisma.Decimal | null | undefined,
+    userId: string,
   ): Promise<FullPriceBreakdown> {
     const { lines, subtotal } = await this.priceLines(inputs);
 
     let discount = new Prisma.Decimal(0);
     let promo: PromoCode | null = null;
     if (promoCode) {
-      const evaluation = await this.evaluatePromo(promoCode, subtotal);
+      const evaluation = await this.evaluatePromo(promoCode, subtotal, userId);
       discount = evaluation.discount;
       promo = evaluation.promo;
     }
 
     const deliveryFee =
-      deliveryMethod === DeliveryMethod.PICKUP ? new Prisma.Decimal(0) : settings.deliveryFee;
+      deliveryMethod === DeliveryMethod.PICKUP
+        ? new Prisma.Decimal(0)
+        : (deliveryFeeOverride ?? settings.deliveryFee);
     const { tax, totalAmount } = this.computeTotals(
       subtotal,
       discount,

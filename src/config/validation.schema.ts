@@ -5,7 +5,13 @@ import * as Joi from 'joi';
  * and throws (fails fast) if a required variable is missing or malformed.
  */
 // Secret-bearing keys checked by the production placeholder guard below.
-const SECRET_ENV_KEYS = ['JWT_ACCESS_SECRET', 'DATABASE_URL', 'POSTGRES_PASSWORD'] as const;
+const SECRET_ENV_KEYS = [
+  'JWT_ACCESS_SECRET',
+  'DATABASE_URL',
+  'POSTGRES_PASSWORD',
+  'MOYASAR_SECRET_KEY',
+  'MOYASAR_WEBHOOK_SECRET',
+] as const;
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
@@ -34,6 +40,21 @@ export const validationSchema = Joi.object({
   // Public origin used to build the imageUrl returned by the upload endpoint.
   PUBLIC_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
   UPLOAD_MAX_FILE_SIZE_MB: Joi.number().integer().min(1).max(20).default(5),
+  // Optional: reverse geocoding is disabled (controlled 502 on request) when unset.
+  GOOGLE_GEOCODING_API_KEY: Joi.string().allow('').optional(),
+  // Optional at boot (local/test never need real Google billing) — but
+  // GoogleRoutesService logs at 'error' in production when this is unset
+  // (see the isProduction check there, mirroring firebase-admin.provider.ts),
+  // and every distance-pricing quote/checkout request fails with a
+  // controlled 502 while unset.
+  GOOGLE_ROUTES_API_KEY: Joi.string().allow('').optional(),
+  // Optional at boot (local/test/CI never need real Moyasar credentials) —
+  // MoyasarProvider logs at 'error' in production when unset, and every
+  // CARD payment intent/confirm/capture/void/webhook request fails with a
+  // controlled error while unset, mirroring GOOGLE_ROUTES_API_KEY above.
+  MOYASAR_SECRET_KEY: Joi.string().allow('').optional(),
+  MOYASAR_PUBLISHABLE_KEY: Joi.string().allow('').optional(),
+  MOYASAR_WEBHOOK_SECRET: Joi.string().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)

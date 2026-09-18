@@ -397,6 +397,7 @@ describe('Devices & FCM (integration)', () => {
         id: 'order-123',
         userId: user.id,
         status: 'OUT_FOR_DELIVERY',
+        deliveryMethod: 'DELIVERY',
       });
 
       expect(result.successCount).toBe(1);
@@ -405,6 +406,46 @@ describe('Devices & FCM (integration)', () => {
       expect(sentMessage.data.type).toBe('order_out_for_delivery');
       expect(sentMessage.data.route).toBe('/orders/tracking/order-123');
       expect(sentMessage.data.entityId).toBe('order-123');
+    });
+
+    it('targets only the order owner: another user\'s device tokens are never included', async () => {
+      const owner = await registerUser();
+      const otherUser = await registerUser();
+      const ownerToken = `fcm-${randomUUID()}`;
+      const otherToken = `fcm-${randomUUID()}`;
+      cleanupTokens.push(ownerToken, otherToken);
+      await prisma.deviceToken.createMany({
+        data: [
+          {
+            token: ownerToken,
+            userId: owner.user.id,
+            platform: 'ANDROID',
+            lastSeenAt: new Date(),
+          },
+          {
+            token: otherToken,
+            userId: otherUser.user.id,
+            platform: 'ANDROID',
+            lastSeenAt: new Date(),
+          },
+        ],
+      });
+
+      const sendEachForMulticast = jest
+        .fn()
+        .mockResolvedValue({ successCount: 1, failureCount: 0, responses: [{ success: true }] });
+      getMessaging.mockReturnValue({ sendEachForMulticast });
+
+      await notificationsService.sendOrderStatusNotification({
+        id: 'order-owner-only',
+        userId: owner.user.id,
+        status: 'CONFIRMED',
+        deliveryMethod: 'DELIVERY',
+      });
+
+      const sentMessage = sendEachForMulticast.mock.calls[0][0];
+      expect(sentMessage.tokens).toEqual([ownerToken]);
+      expect(sentMessage.tokens).not.toContain(otherToken);
     });
   });
 

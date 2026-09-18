@@ -1,7 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
+import { DeliveryMethod, OrderStatus } from '@prisma/client';
 import type { App } from 'firebase-admin/app';
-import { getMessaging, type SendResponse } from 'firebase-admin/messaging';
+import {
+  getMessaging,
+  type ApnsConfig,
+  type MulticastMessage,
+  type SendResponse,
+} from 'firebase-admin/messaging';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
 import {
@@ -22,6 +27,46 @@ const INVALID_TOKEN_ERROR_CODES = new Set([
   'messaging/invalid-argument',
 ]);
 
+/** FCM multicast requests reject more than 500 registration tokens per call. */
+const FCM_MULTICAST_BATCH_SIZE = 500;
+
+/**
+ * Builds the APNs delivery config for a multicast message. Data-only pushes
+ * (no `notification` block) need `apns-push-type: background` plus
+ * `content-available: 1` so APNs treats them as a silent background
+ * notification instead of silently dropping them; notification+data pushes
+ * need `apns-push-type: alert` so APNs displays the alert derived from the
+ * top-level `notification` block, plus a sound.
+ */
+function buildApnsConfig(hasNotification: boolean): ApnsConfig {
+  if (hasNotification) {
+    return {
+      headers: {
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+      },
+      payload: {
+        aps: {
+          contentAvailable: true,
+          sound: 'default',
+        },
+      },
+    };
+  }
+
+  return {
+    headers: {
+      'apns-push-type': 'background',
+      'apns-priority': '5',
+    },
+    payload: {
+      aps: {
+        contentAvailable: true,
+      },
+    },
+  };
+}
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -34,6 +79,17 @@ export class NotificationsService {
   /** False in local/test environments with no Firebase credentials configured. */
   get isEnabled(): boolean {
     return this.firebaseApp !== null;
+  }
+
+  /**
+   * Safe production/admin status surface (§6): booleans only — never the
+   * service-account JSON, private keys, or access tokens that
+   * `firebase-admin.provider.ts` reads. Lets an operator (or an admin
+   * dashboard) see "FCM is unconfigured" instead of only discovering it when
+   * a broadcast quietly reports FAILED.
+   */
+  getStatus(): { firebase: { configured: boolean; enabled: boolean } } {
+    return { firebase: { configured: this.isEnabled, enabled: this.isEnabled } };
   }
 
   /**
@@ -100,30 +156,63 @@ export class NotificationsService {
       return { successCount: 0, failureCount: tokens.length, invalidTokens: [] };
     }
 
-    const response = await getMessaging(this.firebaseApp).sendEachForMulticast({
-      tokens,
-      data: message.data,
-      ...(message.notification ? { notification: message.notification } : {}),
-    });
+    const batches: string[][] = [];
+    for (let i = 0; i < tokens.length; i += FCM_MULTICAST_BATCH_SIZE) {
+      batches.push(tokens.slice(i, i + FCM_MULTICAST_BATCH_SIZE));
+    }
 
-    const invalidTokens: string[] = [];
-    response.responses.forEach((result: SendResponse, index: number) => {
-      if (!result.success && result.error && INVALID_TOKEN_ERROR_CODES.has(result.error.code)) {
-        invalidTokens.push(tokens[index]);
+    const apns = buildApnsConfig(!!message.notification);
+
+    let successCount = 0;
+    let failureCount = 0;
+    const invalidTokens = new Set<string>();
+
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batchTokens = batches[batchIndex];
+      let response;
+      try {
+        const multicastMessage: MulticastMessage = {
+          tokens: batchTokens,
+          data: message.data,
+          ...(message.notification ? { notification: message.notification } : {}),
+          apns,
+        };
+        response = await getMessaging(this.firebaseApp).sendEachForMulticast(multicastMessage);
+      } catch (error) {
+        // Only counts/indices — never token values or Firebase credentials.
+        this.logger.error(
+          `FCM batch ${batchIndex + 1}/${batches.length} failed (${successCount} succeeded / ` +
+            `${failureCount} failed across prior batches): ${(error as Error).message}`,
+        );
+        throw error;
       }
-    });
 
-    if (invalidTokens.length > 0) {
+      successCount += response.successCount;
+      failureCount += response.failureCount;
+      response.responses.forEach((result: SendResponse, index: number) => {
+        if (!result.success && result.error && INVALID_TOKEN_ERROR_CODES.has(result.error.code)) {
+          invalidTokens.add(batchTokens[index]);
+        }
+      });
+    }
+
+    const dedupedInvalidTokens = [...invalidTokens];
+    if (dedupedInvalidTokens.length > 0) {
       await this.prisma.deviceToken.updateMany({
-        where: { token: { in: invalidTokens } },
+        where: { token: { in: dedupedInvalidTokens } },
         data: { isActive: false },
       });
     }
 
+    this.logger.log(
+      `Dispatched ${tokens.length} token(s) across ${batches.length} batch(es): ` +
+        `${successCount} succeeded, ${failureCount} failed.`,
+    );
+
     return {
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      invalidTokens,
+      successCount,
+      failureCount,
+      invalidTokens: dedupedInvalidTokens,
     };
   }
 
@@ -141,8 +230,9 @@ export class NotificationsService {
     id: string;
     userId: string;
     status: OrderStatus;
+    deliveryMethod: DeliveryMethod;
   }): Promise<SendResult> {
-    const payload = buildOrderStatusPayload(order.id, order.status);
+    const payload = buildOrderStatusPayload(order.id, order.status, order.deliveryMethod);
     if (!payload) {
       return { successCount: 0, failureCount: 0, invalidTokens: [] };
     }

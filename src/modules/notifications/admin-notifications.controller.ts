@@ -14,12 +14,27 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { CampaignsService } from './campaigns.service';
+import { NotificationsService } from './notifications.service';
 import { CampaignDto, ListCampaignsDto, ScheduleCampaignDto } from './dto/campaign.dto';
 
 @Roles('ADMIN')
 @Controller({ path: 'admin/notifications', version: '1' })
 export class AdminNotificationsController {
-  constructor(private readonly campaignsService: CampaignsService) {}
+  constructor(
+    private readonly campaignsService: CampaignsService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
+
+  /**
+   * Safe FCM provider status (§6) — booleans only, never credentials. Lets
+   * the admin panel show "push notifications unavailable" instead of admins
+   * only discovering Firebase is unconfigured when a broadcast silently
+   * fails to reach anyone.
+   */
+  @Get('status')
+  status() {
+    return this.notificationsService.getStatus();
+  }
 
   @HttpCode(HttpStatus.CREATED)
   @Post('send')

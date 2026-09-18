@@ -226,14 +226,18 @@ describe('Phase 1 database constraints (integration)', () => {
       await expect(
         prisma.restaurantSettings.create({
           data: {
-            restaurantName: 'Duplicate',
+            restaurantNameAr: 'مكرر',
+            restaurantNameEn: 'Duplicate',
             phone: '+20000000000',
-            addressText: 'Nowhere',
+            addressAr: 'لا مكان',
+            addressEn: 'Nowhere',
             taxRatePercent: new Prisma.Decimal('0'),
             deliveryFee: new Prisma.Decimal('0'),
             minOrderAmount: new Prisma.Decimal('0'),
             currency: 'EGP',
             workingHours: {},
+            restaurantLatitude: new Prisma.Decimal('21.5705641'),
+            restaurantLongitude: new Prisma.Decimal('39.1681808'),
           },
         }),
       ).rejects.toMatchObject({ code: 'P2002' });

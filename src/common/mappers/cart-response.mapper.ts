@@ -107,9 +107,13 @@ export function toCartItemResponse(
   };
 }
 
-/** Matches the Flutter `Cart` model (plan §3.4): deliveryFee/taxRate are flat
- * RestaurantSettings passthrough values, not a computed total (no
- * deliveryMethod exists at the cart stage — that's chosen at checkout). */
+/** Matches the Flutter `Cart` model (plan §3.4). `taxRate` is a flat
+ * RestaurantSettings passthrough. `deliveryFee` is always `0` here — no
+ * deliveryMethod/deliveryZone exists at the cart stage (both are chosen at
+ * checkout), and Phase 8 made the real DELIVERY fee zone-specific, so this
+ * response must never guess/default one before a zone is selected. The
+ * authoritative per-order deliveryFee only exists on the OrderResponseDto
+ * returned by checkout. */
 export interface CartResponseDto {
   items: CartItemResponseDto[];
   appliedPromo: PromoResponseDto | null;

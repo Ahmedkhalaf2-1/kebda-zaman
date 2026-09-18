@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { OrderStatus } from '@prisma/client';
+import { DeliveryMethod, OrderStatus } from '@prisma/client';
 
 /** The 14 types the Flutter `NotificationType` enum parses (audit §12). */
 export const NOTIFICATION_TYPES = [
@@ -63,15 +63,17 @@ export function toFcmDataPayload(payload: AppNotificationPayload): Record<string
   return data;
 }
 
+type OrderStatusNotificationConfig = { type: NotificationType; title: string; body: string };
+
 /**
- * DB OrderStatus -> notification content. READY has no DB status (plan
- * §7.1 D2a Option A — deferred, admin-only sub-state) so it's not mapped
- * here; a future Phase 7 admin flow can send `order_ready` directly without
- * needing a matching OrderStatus value.
+ * DB OrderStatus -> notification content. Fix 12A split the state machine so
+ * OUT_FOR_DELIVERY/DELIVERED are DELIVERY-only and READY_FOR_PICKUP/PICKED_UP
+ * are PICKUP-only (OrdersService.getAllowedTransitions never lets one
+ * delivery method reach the other method's statuses) — every DB status now
+ * maps to exactly one piece of wording, so this is a single flat table
+ * instead of a shared-map-plus-per-method-override.
  */
-const ORDER_STATUS_NOTIFICATION: Partial<
-  Record<OrderStatus, { type: NotificationType; title: string; body: string }>
-> = {
+const ORDER_STATUS_NOTIFICATION: Record<OrderStatus, OrderStatusNotificationConfig> = {
   PENDING: { type: 'order_created', title: 'Order placed', body: 'Your order has been received.' },
   CONFIRMED: {
     type: 'order_confirmed',
@@ -88,10 +90,20 @@ const ORDER_STATUS_NOTIFICATION: Partial<
     title: 'Order out for delivery',
     body: 'Your order is on its way.',
   },
+  READY_FOR_PICKUP: {
+    type: 'order_ready',
+    title: 'Order ready for pickup',
+    body: 'Your order is ready to be collected.',
+  },
   DELIVERED: {
     type: 'order_delivered',
     title: 'Order delivered',
     body: 'Your order has been delivered. Enjoy!',
+  },
+  PICKED_UP: {
+    type: 'order_delivered',
+    title: 'Order picked up',
+    body: 'Your order has been picked up. Enjoy!',
   },
   CANCELLED: {
     type: 'order_cancelled',
@@ -100,10 +112,25 @@ const ORDER_STATUS_NOTIFICATION: Partial<
   },
 };
 
+/** Defense in depth: OrdersService.getAllowedTransitions already makes these
+ * combinations unreachable, but a notification must never describe a
+ * DELIVERY order as ready-for-pickup/picked-up or a PICKUP order as
+ * out-for-delivery/delivered even if a status were ever forced directly in
+ * the DB. */
+const DELIVERY_ONLY_STATUSES = new Set<OrderStatus>(['OUT_FOR_DELIVERY', 'DELIVERED']);
+const PICKUP_ONLY_STATUSES = new Set<OrderStatus>(['READY_FOR_PICKUP', 'PICKED_UP']);
+
 export function buildOrderStatusPayload(
   orderId: string,
   status: OrderStatus,
+  deliveryMethod: DeliveryMethod,
 ): AppNotificationPayload | null {
+  if (deliveryMethod === 'PICKUP' && DELIVERY_ONLY_STATUSES.has(status)) {
+    return null;
+  }
+  if (deliveryMethod === 'DELIVERY' && PICKUP_ONLY_STATUSES.has(status)) {
+    return null;
+  }
   const config = ORDER_STATUS_NOTIFICATION[status];
   if (!config) {
     return null;

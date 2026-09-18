@@ -100,14 +100,18 @@ request — `PricingService` (`src/modules/pricing/pricing.service.ts`) is the
 single source of truth. Requests only ever carry references
 (`menuItemId`/`variantId`/`addonIds`) and a `quantity`.
 
-- `GET /cart` returns each line's `unitPrice`/`totalPrice` plus flat
-  `deliveryFee`/`taxRate` (a passthrough of current `RestaurantSettings` —
-  **not yet reduced by delivery method**, since delivery method is chosen
-  at checkout, not cart time). **The cart response has no aggregate
-  `subtotal`/`total` field** — Flutter must sum `items[].totalPrice`
-  client-side for cart-screen display, but that sum is only a preview; the
-  authoritative total is computed again at checkout and returned on the
-  `Order`.
+- `GET /cart` returns each line's `unitPrice`/`totalPrice` plus a flat
+  `taxRate` (a passthrough of current `RestaurantSettings.taxRatePercent`)
+  and **`deliveryFee`, which is always `0` here** (Phase 8) — no
+  deliveryMethod/deliveryZone is known yet at the cart stage (both are
+  chosen at checkout), and the real DELIVERY fee is now zone-specific, so
+  this response must never guess or default one. Do not display this `0`
+  as "free delivery" — treat it as "not yet determined"; the authoritative
+  `deliveryFee` only exists on the `Order` returned by checkout. **The cart
+  response has no aggregate `subtotal`/`total` field** — Flutter must sum
+  `items[].totalPrice` client-side for cart-screen display, but that sum is
+  only a preview; the authoritative total is computed again at checkout and
+  returned on the `Order`.
 - A stale cart line (item/variant/addon made unavailable after being added)
   is still returned with `isAvailable: false` and a zeroed price — never
   silently dropped. The customer must be able to see and remove it. Do not
@@ -123,10 +127,12 @@ they are 100% equivalent. Request body carries **no monetary fields**.
 - `deliveryMethod: "DELIVERY" | "PICKUP"` (required).
 - `paymentMethod: "CASH" | "CARD" | "WALLET"` (required, raw uppercase — see enum table).
 - `deliveryAddress` — **required when `deliveryMethod=DELIVERY`** (`{title, street, building, floor?, apartment?, city}`), else `422 DELIVERY_ADDRESS_REQUIRED`. When `PICKUP`, omit it — the order's stored `deliveryAddress` becomes `{"type":"PICKUP"}`.
+- `deliveryZoneId` — **required when `deliveryMethod=DELIVERY`** (Phase 8), else `422 DELIVERY_ZONE_UNAVAILABLE`. Fetch valid ids from `GET /delivery-zones`. Ignored for `PICKUP`. There is no `deliveryFee` field on this DTO at all — it is never accepted from the client, only ever resolved server-side from the zone.
 - `promoCode` — optional string; server re-evaluates it against the caller's real cart (client-sent subtotal, if any, is ignored everywhere promo codes are evaluated).
 - `notes` — optional string, stored only on the first `OrderStatusHistory` entry (no dedicated `Order.notes` column).
 - **`Idempotency-Key` header** (optional, any string) — send the same value to retry a checkout call safely (e.g. after a timeout) without creating a duplicate order; the server namespaces it per-user internally. Omitting it means every call creates a new order attempt.
-- Cart must be non-empty (`409 EMPTY_CART`), and the priced subtotal must meet `RestaurantSettings.minOrderAmount` (`422 BELOW_MIN_ORDER`).
+- Checkout is rejected with `422 RESTAURANT_NOT_ACCEPTING_ORDERS` if `acceptingOrders` (§7) is currently `false`.
+- Cart must be non-empty (`409 EMPTY_CART`). Two independent minimum-order floors can apply: the store-wide `RestaurantSettings.minOrderAmount` (`422 BELOW_MIN_ORDER`, applies to every order regardless of fulfillment type) and, for `DELIVERY` orders specifically, the selected zone's own `minimumOrder` (`422 MINIMUM_ORDER_NOT_MET`, checked first).
 - A promo that's expired/inactive/exhausted/below its own min-order fails with `404 PROMO_NOT_FOUND` / `422 PROMO_INVALID` / `422 PROMO_EXPIRED` / `422 PROMO_MIN_ORDER` respectively — checkout does **not** silently drop an invalid promo, it fails the whole request.
 - On success: cart is cleared, a `Payment(status=PENDING)` row is created alongside the `Order`, and the response is the full `Order` (see Customer Orders group for shape).
 
@@ -362,17 +368,24 @@ All routes require an access token (any role — guests included, "guest-ok"). N
 
 ### `GET /settings`
 - Auth: Public.
-- Response `200`: `{ deliveryFee: number, taxRatePercent: number, minOrderAmount: number, workingHours: {open:"HH:MM", close:"HH:MM"}, isMaintenanceMode: boolean }`
+- Response `200`: `{ restaurantNameAr, restaurantNameEn, logoUrl:string|null, phone, addressAr, addressEn, deliveryFee:number, taxRatePercent:number, minOrderAmount:number, workingHours: WorkingHoursDay[7], timezone:string, acceptingOrders:boolean, closedMessageAr:string|null, closedMessageEn:string|null, isMaintenanceMode:boolean }`
+- `id`, `currency`, and `updatedAt` are **admin-only** (see §19) — not present on this public response.
+- `WorkingHoursDay` = `{ dayOfWeek:0-6, isOpen:boolean, openTime:"HH:MM"|null, closeTime:"HH:MM"|null }`. Times are in the `timezone` field's IANA zone (default `Africa/Cairo`) — never the device's or server's local zone. Overnight ranges (e.g. `openTime:"18:00", closeTime:"02:00"`) are valid. **Informational/display only** — the backend does not derive order-acceptance from these hours; see `acceptingOrders` below and §8 Phase 8 delivery config doc for the full contract.
+- `acceptingOrders`: manual ADMIN-controlled gate. When `false`, checkout (§8) rejects new orders with `422 RESTAURANT_NOT_ACCEPTING_ORDERS` — `closedMessageAr`/`closedMessageEn` are the message to show. Cart/menu browsing is never blocked by this flag.
 - There is no client-side enforcement of `isMaintenanceMode` — Flutter must check this flag itself and show a maintenance screen if true; the backend does not block other endpoints when it's set.
+
+See `PHASE_8_RESTAURANT_SETTINGS_API_CONTRACT.md` for full details, delivery-zone endpoints, and checkout integration.
 
 ## 8. Checkout
 
 ### `POST /orders` / `POST /checkout` (identical handler, both real routes)
 - Auth: `CUSTOMER` role only (this also covers guests, whose role is `CUSTOMER`).
 - Headers: `Idempotency-Key?: string` (recommended for retry-safety — see §F).
-- Body: `{ deliveryMethod: "DELIVERY"|"PICKUP", paymentMethod: "CASH"|"CARD"|"WALLET", deliveryAddress?: {title,street,building,floor?,apartment?,city}, promoCode?: string(≤50), notes?: string(≤1000) }`
+- Body: `{ deliveryMethod: "DELIVERY"|"PICKUP", paymentMethod: "CASH"|"CARD"|"WALLET", deliveryAddress?: {title,street,building,floor?,apartment?,city}, deliveryZoneId?: uuid, promoCode?: string(≤50), notes?: string(≤1000) }`
+- **`deliveryZoneId` is required when `deliveryMethod="DELIVERY"`** (Phase 8) — fetch it from `GET /delivery-zones` first. The backend resolves the real `deliveryFee`/minimum from this zone; a client-supplied fee is never accepted (there is no such field on this DTO — sending one is a `400`, the whitelist validator rejects unknown fields outright). Not required (ignored if sent) for `PICKUP`, which always has `deliveryFee: 0`.
+- Checkout is rejected outright with `422 RESTAURANT_NOT_ACCEPTING_ORDERS` if the restaurant's `acceptingOrders` flag (§7) is currently `false` — checked before cart/zone validation.
 - Response `201`: `OrderResponseDto` (see Customer Orders group).
-- Errors: `422 DELIVERY_ADDRESS_REQUIRED`, `409 EMPTY_CART`, `422 BELOW_MIN_ORDER`, `404/422` promo errors (§6), `404 ITEM_UNAVAILABLE` / `422 INVALID_VARIANT`/`INVALID_ADDON_SELECTION` (a line went stale between cart-view and checkout).
+- Errors: `422 RESTAURANT_NOT_ACCEPTING_ORDERS`, `422 DELIVERY_ADDRESS_REQUIRED`, `422 DELIVERY_ZONE_UNAVAILABLE` (missing/unknown/inactive zone for a DELIVERY order), `422 MINIMUM_ORDER_NOT_MET` (subtotal below the zone's `minimumOrder` — `details:{minimumOrder}`), `409 EMPTY_CART`, `422 BELOW_MIN_ORDER` (the store-wide floor, still enforced independently of any zone), `404/422` promo errors (§6), `404 ITEM_UNAVAILABLE` / `422 INVALID_VARIANT`/`INVALID_ADDON_SELECTION` (a line went stale between cart-view and checkout).
 
 ## 9. Customer Orders
 
@@ -403,10 +416,11 @@ All routes require an access token (any role — guests included, "guest-ok"). N
   "deliveryAddress": { "title":"..","street":"..","building":"..","floor":null,"apartment":null,"city":".." } ,
   "paymentMethod": "cash",
   "subtotal": 120, "deliveryFee": 20, "tax": 16.8, "discount": 0, "totalAmount": 156.8,
-  "createdAt": "2026-07-24T12:00:00.000Z", "estimatedDeliveryTime": null
+  "createdAt": "2026-07-24T12:00:00.000Z", "estimatedDeliveryTime": null,
+  "deliveryZone": { "id": "uuid", "nameAr": "..", "nameEn": ".." }
 }
 ```
-`items[].menuItem`/`selectedVariant`/`selectedAddons` are **immutable snapshots** taken at order time — they never reflect later catalog edits, and `menuItem` here has only `{nameAr,nameEn,imageUrl}` (not the full public shape). `deliveryAddress` is `{"type":"PICKUP"}` for pickup orders.
+`items[].menuItem`/`selectedVariant`/`selectedAddons` are **immutable snapshots** taken at order time — they never reflect later catalog edits, and `menuItem` here has only `{nameAr,nameEn,imageUrl}` (not the full public shape). `deliveryAddress` is `{"type":"PICKUP"}` for pickup orders. `deliveryZone` (Phase 8, additive) is `null` for `PICKUP` orders and for any order placed before Phase 8; when present it's also a snapshot (the zone's name at order time), not a live join.
 
 ## 10. Device Tokens / FCM
 
@@ -581,14 +595,22 @@ All routes require `ADMIN` role.
 
 ## 19. Admin Restaurant Settings
 
-All routes require `ADMIN` role. There is a single settings row (singleton) — no create/delete, only read/replace.
+All routes require `ADMIN` role. There is a single settings row (singleton) — no create/delete, only read/replace. **Phase 8**: `restaurantName`/`addressText` were split into Ar/En pairs and `workingHours` changed shape from a single `{open,close}` pair to a 7-entry per-day array — see `PHASE_8_RESTAURANT_SETTINGS_API_CONTRACT.md` for the full migration/compatibility notes.
 
 ### `GET /admin/settings`
-- Response `200`: `{ id, restaurantName, phone, addressText, deliveryFee, taxRatePercent, minOrderAmount, currency, workingHours, isMaintenanceMode, updatedAt }`
+- Response `200`: same as public `GET /settings` (§7) plus `{ id, currency, updatedAt }`.
 
 ### `PUT /admin/settings`
-- Body (full replace, **every** field required): `{ restaurantName:string(≤200), phone:string(≤50), addressText:string(≤500), taxRatePercent:number(0-100), deliveryFee:number≥0, minOrderAmount:number≥0, currency:string(≤10), workingHours:{open:"HH:MM",close:"HH:MM"} (24h regex-validated), isMaintenanceMode:boolean }`
-- Response `200`: same shape as GET. No `400` field-level partial-update path exists — omitting any field fails whole-body validation.
+- Body (full replace, **every** field required except `logoUrl`/`closedMessageAr`/`closedMessageEn`, which are optional/nullable): `{ restaurantNameAr:string(≤200), restaurantNameEn:string(≤200), logoUrl?:string(≤2048)|null, phone:string(≤50), addressAr:string(≤500), addressEn:string(≤500), taxRatePercent:number(0-100), deliveryFee:number≥0, minOrderAmount:number≥0, currency:string(≤10), workingHours:WorkingHoursDay[7] (24h regex-validated, exactly one entry per dayOfWeek 0-6), timezone:string, isMaintenanceMode:boolean, acceptingOrders:boolean, closedMessageAr?:string(≤500)|null, closedMessageEn?:string(≤500)|null }`
+- `logoUrl`: upload the image first via the existing `POST /admin/uploads/image` (§ Admin Uploads) and pass the returned URL here — no separate logo-upload endpoint.
+- Response `200`: same shape as GET. No `400` field-level partial-update path exists — omitting any required field fails whole-body validation. `400 INVALID_WORKING_HOURS` for a malformed weekly-hours array (wrong length, duplicate/missing `dayOfWeek`, or `isOpen:true` without both `openTime`/`closeTime`).
+
+## 19a. Delivery Zones (Phase 8)
+
+See `PHASE_8_RESTAURANT_SETTINGS_API_CONTRACT.md` for the full contract. Summary:
+- `GET /delivery-zones` — public, active zones only, sorted `sortOrder` then `createdAt`.
+- `GET/POST /admin/delivery-zones`, `PATCH/DELETE /admin/delivery-zones/:id` — `ADMIN` only. Body: `{ nameAr, nameEn, deliveryFee:number≥0, minimumOrder:number≥0, isActive?:boolean, sortOrder?:number }`.
+- Deletion is a soft delete — historical orders keep their own name/fee snapshot regardless.
 
 ## 20. Admin Notification Campaigns
 

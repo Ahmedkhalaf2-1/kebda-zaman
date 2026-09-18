@@ -98,8 +98,11 @@ describe('Payments (integration)', () => {
     return res.body as { id: string; totalAmount: number };
   }
 
+  // `checkout()` above always places a PICKUP order, so completion runs
+  // through the pickup-specific lifecycle (readyForPickup -> pickedUp), not
+  // the delivery one (outForDelivery -> delivered).
   async function advanceToDelivered(orderId: string, adminToken: string) {
-    for (const status of ['confirmed', 'preparing', 'outForDelivery', 'delivered']) {
+    for (const status of ['confirmed', 'preparing', 'readyForPickup', 'pickedUp']) {
       const res = await request(app.getHttpServer())
         .patch(`/api/v1/admin/orders/${orderId}/status`)
         .set('Authorization', `Bearer ${adminToken}`)

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import {
   AdminCategoryResponseDto,
   CategoryResponseDto,
@@ -16,9 +17,12 @@ import {
 import {
   ADMIN_MENU_ITEM_INCLUDE,
   AdminMenuItemResponseDto,
+  MenuItemDetailResponseDto,
   MenuItemResponseDto,
+  MenuItemWithRelations,
   PUBLIC_MENU_ITEM_INCLUDE,
   toAdminMenuItemResponse,
+  toMenuItemDetailResponse,
   toMenuItemResponse,
 } from '../../common/mappers/menu-item-response.mapper';
 import { ListMenuItemsDto } from './dto/list-menu-items.dto';
@@ -28,11 +32,29 @@ import { AddonDto, AddonGroupDto, MenuItemDto, VariantDto } from './dto/menu-ite
 import { AdminListMenuItemsDto } from './dto/admin-list-menu-items.dto';
 
 const FEATURED_LIMIT = 10;
+const MAX_RECOMMENDATIONS = 3;
 const menuItemInclude = PUBLIC_MENU_ITEM_INCLUDE;
 
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reviewsService: ReviewsService,
+  ) {}
+
+  /**
+   * Batch-fetches rating aggregates for a page of menu items in ONE query
+   * (see ReviewsService.getMenuItemRatingAggregates) and maps each item to
+   * its response DTO — never a per-item COUNT/AVG query.
+   */
+  private async attachRatingsAndMap(
+    items: MenuItemWithRelations[],
+  ): Promise<MenuItemResponseDto[]> {
+    const aggregates = await this.reviewsService.getMenuItemRatingAggregates(
+      items.map((item) => item.id),
+    );
+    return items.map((item) => toMenuItemResponse(item, aggregates.get(item.id)));
+  }
 
   async listCategories(): Promise<CategoryResponseDto[]> {
     const categories = await this.prisma.category.findMany({
@@ -66,18 +88,44 @@ export class CatalogService {
       skip: (page - 1) * limit,
       take: limit,
     });
-    return items.map(toMenuItemResponse);
+    return this.attachRatingsAndMap(items);
   }
 
-  async getMenuItem(id: string): Promise<MenuItemResponseDto> {
-    const item = await this.prisma.menuItem.findFirst({
-      where: { id, deletedAt: null },
-      include: menuItemInclude,
-    });
+  /**
+   * Only this endpoint expands "Often Ordered With" (plan VO3 Menu §8) — list/
+   * search/featured stay on the lightweight MenuItemResponseDto. Recommended
+   * items are fetched in the same round-trip as the item itself (no N+1), and
+   * filtered to what a customer could actually see: not soft-deleted, available,
+   * and under an active, non-deleted category.
+   */
+  async getMenuItem(id: string): Promise<MenuItemDetailResponseDto> {
+    const [item, recommendations, ratingSummary] = await Promise.all([
+      this.prisma.menuItem.findFirst({
+        where: { id, deletedAt: null },
+        include: menuItemInclude,
+      }),
+      this.prisma.menuItemRecommendation.findMany({
+        where: {
+          menuItemId: id,
+          recommendedMenuItem: {
+            deletedAt: null,
+            isAvailable: true,
+            category: { deletedAt: null, isActive: true },
+          },
+        },
+        orderBy: { displayOrder: 'asc' },
+        include: { recommendedMenuItem: true },
+      }),
+      this.reviewsService.getMenuItemRatingSummary(id),
+    ]);
     if (!item) {
       throw new NotFoundException({ message: 'Menu item not found', code: 'MENU_ITEM_NOT_FOUND' });
     }
-    return toMenuItemResponse(item);
+    return toMenuItemDetailResponse(
+      item,
+      recommendations.map((recommendation) => recommendation.recommendedMenuItem),
+      ratingSummary,
+    );
   }
 
   async search(query: SearchMenuDto): Promise<MenuItemResponseDto[]> {
@@ -102,7 +150,7 @@ export class CatalogService {
       include: menuItemInclude,
       orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    return items.map(toMenuItemResponse);
+    return this.attachRatingsAndMap(items);
   }
 
   async featured(): Promise<{
@@ -123,7 +171,7 @@ export class CatalogService {
       }),
       this.listCategories(),
     ]);
-    return { featured: featuredItems.map(toMenuItemResponse), categories };
+    return { featured: await this.attachRatingsAndMap(featuredItems), categories };
   }
 
   // ===========================================================================
@@ -214,6 +262,12 @@ export class CatalogService {
 
   async createMenuItem(dto: MenuItemDto): Promise<AdminMenuItemResponseDto> {
     await this.assertCategoryExists(dto.categoryId);
+    this.assertValidCompareAtPrice(dto.basePrice, dto.compareAtPrice ?? null);
+    this.assertValidSalePrice(dto.basePrice, dto.salePrice ?? null);
+    if (dto.recommendationItemIds?.length) {
+      // The new item's own id doesn't exist yet, so self-reference can't occur here.
+      await this.validateRecommendationIds(dto.recommendationItemIds);
+    }
 
     const created = await this.prisma.menuItem.create({
       data: {
@@ -223,10 +277,22 @@ export class CatalogService {
         descriptionAr: dto.descriptionAr,
         descriptionEn: dto.descriptionEn,
         basePrice: dto.basePrice,
+        salePrice: dto.salePrice,
+        calories: dto.calories,
+        compareAtPrice: dto.compareAtPrice,
+        badge: dto.badge,
         imageUrl: dto.imageUrl,
         isAvailable: dto.isAvailable ?? true,
         isPopular: dto.isPopular ?? false,
         displayOrder: dto.displayOrder,
+        recommendations: dto.recommendationItemIds?.length
+          ? {
+              create: dto.recommendationItemIds.map((recommendedMenuItemId, index) => ({
+                recommendedMenuItemId,
+                displayOrder: index,
+              })),
+            }
+          : undefined,
         variants: dto.variants?.length
           ? {
               create: dto.variants.map((variant) => ({
@@ -281,6 +347,22 @@ export class CatalogService {
       await this.assertCategoryExists(dto.categoryId);
     }
 
+    // Tri-state: property omitted -> preserve existing value; property present as
+    // `null` -> clear it; property present with a value -> replace it.
+    const effectiveCalories = dto.calories !== undefined ? dto.calories : existing.calories;
+    const effectiveCompareAtPrice =
+      dto.compareAtPrice !== undefined
+        ? dto.compareAtPrice
+        : (existing.compareAtPrice?.toNumber() ?? null);
+    const effectiveBadge = dto.badge !== undefined ? dto.badge : existing.badge;
+    const effectiveSalePrice =
+      dto.salePrice !== undefined ? dto.salePrice : (existing.salePrice?.toNumber() ?? null);
+    this.assertValidCompareAtPrice(dto.basePrice, effectiveCompareAtPrice);
+    this.assertValidSalePrice(dto.basePrice, effectiveSalePrice);
+    if (dto.recommendationItemIds) {
+      await this.validateRecommendationIds(dto.recommendationItemIds, id);
+    }
+
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
         await tx.menuItem.update({
@@ -292,6 +374,10 @@ export class CatalogService {
             descriptionAr: dto.descriptionAr,
             descriptionEn: dto.descriptionEn,
             basePrice: dto.basePrice,
+            salePrice: effectiveSalePrice,
+            calories: effectiveCalories,
+            compareAtPrice: effectiveCompareAtPrice,
+            badge: effectiveBadge,
             imageUrl: dto.imageUrl,
             isAvailable: dto.isAvailable ?? existing.isAvailable,
             isPopular: dto.isPopular ?? existing.isPopular,
@@ -304,6 +390,9 @@ export class CatalogService {
         }
         if (dto.addonGroups) {
           await this.syncAddonGroups(tx, id, dto.addonGroups);
+        }
+        if (dto.recommendationItemIds) {
+          await this.syncRecommendations(tx, id, dto.recommendationItemIds);
         }
 
         return tx.menuItem.findUniqueOrThrow({ where: { id }, include: ADMIN_MENU_ITEM_INCLUDE });
@@ -347,6 +436,123 @@ export class CatalogService {
       where: { id },
       data: { deletedAt: new Date(), isAvailable: false },
     });
+  }
+
+  /**
+   * salePrice is the actual charged price when set (PricingService.resolveMenuItemPrice)
+   * — must be strictly less than basePrice. `> 0` is already enforced at the DTO
+   * layer (@IsPositive); this only checks the basePrice-dependent half, so it
+   * also re-validates on every update even when the DTO didn't touch
+   * salePrice itself (see the tri-state `effectiveSalePrice` callers): if an
+   * admin lowers basePrice until it no longer exceeds an untouched existing
+   * salePrice, this rejects the update rather than silently letting the
+   * discount collapse to zero or invert.
+   */
+  private assertValidSalePrice(basePrice: number, salePrice: number | null): void {
+    if (salePrice !== null && salePrice >= basePrice) {
+      throw new UnprocessableEntityException({
+        message: 'Sale price must be strictly less than the base price',
+        code: 'INVALID_SALE_PRICE',
+      });
+    }
+  }
+
+  /** compareAtPrice is a display-only "previous price" — never swapped, cleared, or recalculated here. */
+  private assertValidCompareAtPrice(basePrice: number, compareAtPrice: number | null): void {
+    if (compareAtPrice !== null && compareAtPrice <= basePrice) {
+      throw new UnprocessableEntityException({
+        message: 'Compare-at price must be greater than base price',
+        code: 'INVALID_COMPARE_AT_PRICE',
+      });
+    }
+  }
+
+  /**
+   * Shared "Often Ordered With" validation for create/update. `currentMenuItemId`
+   * is omitted on create (the new item's id doesn't exist yet, so self-reference
+   * can't occur) and passed on update to catch a product recommending itself.
+   * Rejects the whole operation atomically — this only runs SELECT queries and
+   * is always called before any write, so nothing is left partially applied.
+   */
+  private async validateRecommendationIds(
+    recommendationItemIds: string[],
+    currentMenuItemId?: string,
+  ): Promise<void> {
+    if (recommendationItemIds.length === 0) {
+      return;
+    }
+    if (recommendationItemIds.length > MAX_RECOMMENDATIONS) {
+      throw new UnprocessableEntityException({
+        message: `A menu item cannot have more than ${MAX_RECOMMENDATIONS} recommendations`,
+        code: 'TOO_MANY_RECOMMENDATIONS',
+      });
+    }
+    if (new Set(recommendationItemIds).size !== recommendationItemIds.length) {
+      throw new UnprocessableEntityException({
+        message: 'Recommendation item IDs must be unique',
+        code: 'DUPLICATE_RECOMMENDATIONS',
+      });
+    }
+    if (currentMenuItemId && recommendationItemIds.includes(currentMenuItemId)) {
+      throw new UnprocessableEntityException({
+        message: 'A menu item cannot recommend itself',
+        code: 'SELF_RECOMMENDATION_NOT_ALLOWED',
+      });
+    }
+
+    const found = await this.prisma.menuItem.findMany({
+      where: { id: { in: recommendationItemIds }, deletedAt: null },
+      select: { id: true },
+    });
+    if (found.length !== recommendationItemIds.length) {
+      throw new UnprocessableEntityException({
+        message: 'One or more recommended menu items do not exist',
+        code: 'INVALID_RECOMMENDATION_ITEM',
+      });
+    }
+  }
+
+  /**
+   * Fully synchronizes this item's outgoing recommendations to exactly
+   * `recommendationItemIds`, in that order — deletes rows no longer present,
+   * creates newly-added targets, and updates displayOrder for retained ones.
+   * Deletions happen before creates, so a retained/reordered target's row is
+   * never touched by the unique (menuItemId, recommendedMenuItemId)
+   * constraint. Only this item's outgoing rows are touched — incoming
+   * recommendations (other items recommending this one) are untouched.
+   */
+  private async syncRecommendations(
+    tx: Prisma.TransactionClient,
+    menuItemId: string,
+    recommendationItemIds: string[],
+  ): Promise<void> {
+    const existing = await tx.menuItemRecommendation.findMany({
+      where: { menuItemId },
+      select: { id: true, recommendedMenuItemId: true },
+    });
+    const existingByTarget = new Map(existing.map((r) => [r.recommendedMenuItemId, r.id]));
+    const submittedTargets = new Set(recommendationItemIds);
+
+    const idsToDelete = existing
+      .filter((r) => !submittedTargets.has(r.recommendedMenuItemId))
+      .map((r) => r.id);
+    if (idsToDelete.length > 0) {
+      await tx.menuItemRecommendation.deleteMany({ where: { id: { in: idsToDelete } } });
+    }
+
+    for (const [index, recommendedMenuItemId] of recommendationItemIds.entries()) {
+      const existingId = existingByTarget.get(recommendedMenuItemId);
+      if (existingId) {
+        await tx.menuItemRecommendation.update({
+          where: { id: existingId },
+          data: { displayOrder: index },
+        });
+      } else {
+        await tx.menuItemRecommendation.create({
+          data: { menuItemId, recommendedMenuItemId, displayOrder: index },
+        });
+      }
+    }
   }
 
   private async assertCategoryExists(categoryId: string): Promise<void> {

@@ -6,6 +6,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
+import { id } from '../prisma/seed';
 
 /**
  * Phase 3 integration tests: public catalog endpoints against the live
@@ -95,21 +96,56 @@ describe('Catalog (integration)', () => {
 
   describe('GET /menu', () => {
     it('returns items with nested variants and addonGroups/addons as numbers, not strings', async () => {
-      const res = await request(app.getHttpServer()).get('/api/v1/menu');
-      expect(res.status).toBe(200);
-      expect(res.body.length).toBeGreaterThanOrEqual(10); // Phase 1 seed
+      // Own fixture rather than relying on the live seeded catalog: the real
+      // VO3 menu (this phase) has variants but, by design, no addon groups.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة الإضافات', nameEn: 'Addon Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const fixture = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف بإضافات',
+          nameEn: 'Addon Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          variants: {
+            create: [
+              {
+                nameAr: 'عادي',
+                nameEn: 'Regular',
+                priceDelta: new Prisma.Decimal('0.00'),
+                isDefault: true,
+              },
+            ],
+          },
+          addonGroups: {
+            create: [
+              {
+                titleAr: 'إضافات',
+                titleEn: 'Extras',
+                addons: {
+                  create: [{ nameAr: 'إضافة', nameEn: 'Extra', price: new Prisma.Decimal('2.00') }],
+                },
+              },
+            ],
+          },
+        },
+      });
 
-      const withVariant = res.body.find((i: { variants: unknown[] }) => i.variants.length > 0);
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/menu')
+        .query({ categoryId: category.id });
+      expect(res.status).toBe(200);
+
+      const withVariant = res.body.find((i: { id: string }) => i.id === fixture.id);
       expect(withVariant).toBeDefined();
       expect(typeof withVariant.basePrice).toBe('number');
       expect(typeof withVariant.variants[0].priceDelta).toBe('number');
-
-      const withAddon = res.body.find(
-        (i: { addonGroups: { addons: unknown[] }[] }) =>
-          i.addonGroups.length > 0 && i.addonGroups[0].addons.length > 0,
-      );
-      expect(withAddon).toBeDefined();
-      expect(typeof withAddon.addonGroups[0].addons[0].price).toBe('number');
+      expect(withVariant.addonGroups.length).toBeGreaterThan(0);
+      expect(typeof withVariant.addonGroups[0].addons[0].price).toBe('number');
     });
 
     it('filters by categoryId', async () => {
@@ -181,16 +217,48 @@ describe('Catalog (integration)', () => {
 
   describe('GET /menu/items/:id', () => {
     it('returns the full item with variants and addonGroups', async () => {
-      const list = await request(app.getHttpServer()).get('/api/v1/menu');
-      const target = list.body.find(
-        (i: { variants: unknown[]; addonGroups: unknown[] }) =>
-          i.variants.length > 0 && i.addonGroups.length > 0,
-      );
-      expect(target).toBeDefined();
+      // Own fixture rather than relying on the live seeded catalog: the real
+      // VO3 menu (this phase) has variants but, by design, no addon groups.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة تفاصيل الصنف', nameEn: 'Item Detail Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const fixture = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف تفصيلي',
+          nameEn: 'Detail Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          variants: {
+            create: [
+              {
+                nameAr: 'عادي',
+                nameEn: 'Regular',
+                priceDelta: new Prisma.Decimal('0.00'),
+                isDefault: true,
+              },
+            ],
+          },
+          addonGroups: {
+            create: [
+              {
+                titleAr: 'إضافات',
+                titleEn: 'Extras',
+                addons: {
+                  create: [{ nameAr: 'إضافة', nameEn: 'Extra', price: new Prisma.Decimal('2.00') }],
+                },
+              },
+            ],
+          },
+        },
+      });
 
-      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${fixture.id}`);
       expect(res.status).toBe(200);
-      expect(res.body.id).toBe(target.id);
+      expect(res.body.id).toBe(fixture.id);
       expect(res.body.variants.length).toBeGreaterThan(0);
       expect(res.body.addonGroups.length).toBeGreaterThan(0);
       expect(res.body.addonGroups[0]).toMatchObject({
@@ -206,6 +274,224 @@ describe('Catalog (integration)', () => {
       const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${randomUUID()}`);
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('MENU_ITEM_NOT_FOUND');
+    });
+
+    it('returns compareAtPrice as a JSON number, and null metadata fields as null', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة اختبار الميتاداتا', nameEn: 'Metadata Test Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const withMetadata = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف مخفض',
+          nameEn: 'Discounted Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('20.00'),
+          salePrice: new Prisma.Decimal('15.00'),
+          compareAtPrice: new Prisma.Decimal('25.00'),
+          calories: 450,
+          badge: 'BESTSELLER',
+          imageUrl: 'https://example.test/img.png',
+        },
+      });
+      const plain = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف عادي',
+          nameEn: 'Plain Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+        },
+      });
+
+      const withMetadataRes = await request(app.getHttpServer()).get(
+        `/api/v1/menu/items/${withMetadata.id}`,
+      );
+      expect(withMetadataRes.status).toBe(200);
+      expect(withMetadataRes.body.basePrice).toBe(20);
+      expect(typeof withMetadataRes.body.salePrice).toBe('number');
+      expect(withMetadataRes.body.salePrice).toBe(15);
+      expect(typeof withMetadataRes.body.compareAtPrice).toBe('number');
+      expect(withMetadataRes.body.compareAtPrice).toBe(25);
+      expect(withMetadataRes.body.calories).toBe(450);
+      expect(withMetadataRes.body.badge).toBe('BESTSELLER');
+
+      const plainRes = await request(app.getHttpServer()).get(`/api/v1/menu/items/${plain.id}`);
+      expect(plainRes.status).toBe(200);
+      expect(plainRes.body.salePrice).toBeNull();
+      expect(plainRes.body.compareAtPrice).toBeNull();
+      expect(plainRes.body.calories).toBeNull();
+      expect(plainRes.body.badge).toBeNull();
+    });
+  });
+
+  describe('GET /menu/items/:id — oftenOrderedWith', () => {
+    async function makeItem(
+      categoryId: string,
+      overrides: Partial<Prisma.MenuItemUncheckedCreateInput> = {},
+    ) {
+      return prisma.menuItem.create({
+        data: {
+          categoryId,
+          nameAr: `صنف ${randomUUID()}`,
+          nameEn: `Item ${randomUUID()}`,
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          ...overrides,
+        },
+      });
+    }
+
+    it('returns oftenOrderedWith in configured order, with only the approved summary fields, excluding unavailable/soft-deleted/inactive-category/deleted-category recommendations', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة التوصيات', nameEn: 'Recommendations Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const inactiveCategory = await prisma.category.create({
+        data: { nameAr: 'فئة معطلة', nameEn: 'Inactive Rec Category', isActive: false },
+      });
+      cleanupCategoryIds.push(inactiveCategory.id);
+      const deletedCategory = await prisma.category.create({
+        data: { nameAr: 'فئة محذوفة', nameEn: 'Deleted Rec Category', deletedAt: new Date() },
+      });
+      cleanupCategoryIds.push(deletedCategory.id);
+
+      const target = await makeItem(category.id);
+      const validA = await makeItem(category.id, {
+        compareAtPrice: new Prisma.Decimal('15.00'),
+        calories: 300,
+        badge: 'BESTSELLER',
+      });
+      const validB = await makeItem(category.id);
+      const unavailable = await makeItem(category.id, { isAvailable: false });
+      const softDeleted = await makeItem(category.id, { deletedAt: new Date() });
+      const underInactiveCategory = await makeItem(inactiveCategory.id);
+      const underDeletedCategory = await makeItem(deletedCategory.id);
+
+      await prisma.menuItemRecommendation.createMany({
+        data: [
+          { menuItemId: target.id, recommendedMenuItemId: validA.id, displayOrder: 0 },
+          { menuItemId: target.id, recommendedMenuItemId: unavailable.id, displayOrder: 1 },
+          { menuItemId: target.id, recommendedMenuItemId: validB.id, displayOrder: 2 },
+          { menuItemId: target.id, recommendedMenuItemId: softDeleted.id, displayOrder: 3 },
+          {
+            menuItemId: target.id,
+            recommendedMenuItemId: underInactiveCategory.id,
+            displayOrder: 4,
+          },
+          {
+            menuItemId: target.id,
+            recommendedMenuItemId: underDeletedCategory.id,
+            displayOrder: 5,
+          },
+        ],
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith.map((i: { id: string }) => i.id)).toEqual([
+        validA.id,
+        validB.id,
+      ]);
+
+      const summary = res.body.oftenOrderedWith[0];
+      expect(Object.keys(summary).sort()).toEqual(
+        [
+          'id',
+          'categoryId',
+          'nameAr',
+          'nameEn',
+          'descriptionAr',
+          'descriptionEn',
+          'basePrice',
+          'salePrice',
+          'compareAtPrice',
+          'calories',
+          'badge',
+          'imageUrl',
+          'isAvailable',
+          'isPopular',
+        ].sort(),
+      );
+      expect(typeof summary.compareAtPrice).toBe('number');
+      expect(summary.compareAtPrice).toBe(15);
+      expect(summary.badge).toBe('BESTSELLER');
+    });
+
+    it('returns [] when all recommendations are filtered out', async () => {
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة فارغة', nameEn: 'Empty Recs Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const target = await makeItem(category.id);
+      const unavailable = await makeItem(category.id, { isAvailable: false });
+      await prisma.menuItemRecommendation.create({
+        data: { menuItemId: target.id, recommendedMenuItemId: unavailable.id, displayOrder: 0 },
+      });
+
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${target.id}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith).toEqual([]);
+    });
+
+    it('returns the seeded VO3 recommendations for a real menu item, in the approved order', async () => {
+      // "orange-mirinda" -> ["seven-up", "bread", "green-salad"], from the
+      // approved recommendation dataset (prisma/data/vo3-menu.data.ts).
+      const orangeMirindaId = id('menu-item:orange-mirinda');
+      const res = await request(app.getHttpServer()).get(`/api/v1/menu/items/${orangeMirindaId}`);
+      expect(res.status).toBe(200);
+      expect(res.body.oftenOrderedWith.map((i: { id: string }) => i.id)).toEqual([
+        id('menu-item:seven-up'),
+        id('menu-item:bread'),
+        id('menu-item:green-salad'),
+      ]);
+    });
+  });
+
+  describe('Public list/search/featured stay lightweight', () => {
+    it('list, search, and featured responses never include oftenOrderedWith', async () => {
+      // Own fixture for the featured/search checks rather than relying on the
+      // live seeded catalog having a popular or "kebda"-named item.
+      const category = await prisma.category.create({
+        data: { nameAr: 'فئة اختبار الخفة', nameEn: 'Lightweight Fixture Category' },
+      });
+      cleanupCategoryIds.push(category.id);
+      const popularItem = await prisma.menuItem.create({
+        data: {
+          categoryId: category.id,
+          nameAr: 'صنف مميز كبدة',
+          nameEn: 'Popular Kebda Fixture Item',
+          descriptionAr: 'وصف',
+          descriptionEn: 'description',
+          basePrice: new Prisma.Decimal('10.00'),
+          imageUrl: 'https://example.test/img.png',
+          isPopular: true,
+        },
+      });
+
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/menu')
+        .query({ categoryId: category.id });
+      expect(list.body.some((i: { id: string }) => i.id === popularItem.id)).toBe(true);
+      expect(list.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
+
+      const search = await request(app.getHttpServer())
+        .get('/api/v1/menu/search')
+        .query({ q: 'Popular Kebda Fixture' });
+      expect(search.body.some((i: { id: string }) => i.id === popularItem.id)).toBe(true);
+      expect(search.body.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
+
+      const featured = await request(app.getHttpServer()).get('/api/v1/home/featured');
+      expect(featured.body.featured.some((i: { id: string }) => i.id === popularItem.id)).toBe(
+        true,
+      );
+      expect(featured.body.featured.every((i: object) => !('oftenOrderedWith' in i))).toBe(true);
     });
   });
 

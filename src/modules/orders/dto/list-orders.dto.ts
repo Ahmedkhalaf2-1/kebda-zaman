@@ -6,7 +6,9 @@ export const FRONTEND_STATUSES = [
   'confirmed',
   'preparing',
   'outForDelivery',
+  'readyForPickup',
   'delivered',
+  'pickedUp',
   'cancelled',
 ] as const;
 

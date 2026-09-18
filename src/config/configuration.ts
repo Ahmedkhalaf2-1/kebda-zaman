@@ -38,6 +38,28 @@ export interface AppConfig {
     publicBaseUrl: string;
     maxFileSizeMb: number;
   };
+  googleGeocoding: {
+    // Server-side only — never exposed to Flutter. Unset disables the
+    // reverse-geocode endpoint (it fails with a controlled 502).
+    apiKey?: string;
+  };
+  googleRoutes: {
+    // Server-side only — never exposed to Flutter, never logged. Unset
+    // disables distance-based delivery pricing (quote/checkout both fail
+    // with a controlled 502) — see GoogleRoutesService.
+    apiKey?: string;
+  };
+  moyasar: {
+    // Backend-only — used for Basic Auth against api.moyasar.com. Never
+    // exposed to Flutter, never logged, never returned in any API response.
+    secretKey?: string;
+    // Safe to expose to Flutter (it's designed for client-side use) —
+    // returned from the payments/intent endpoint, never used server-side.
+    publishableKey?: string;
+    // Compared against the `secret_token` field inside each webhook payload
+    // body (Moyasar puts the shared secret in the JSON body, not a header).
+    webhookSecret?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -71,5 +93,16 @@ export default (): AppConfig => ({
     dir: resolve(process.cwd(), process.env.UPLOAD_DIR ?? './uploads'),
     publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
     maxFileSizeMb: parseInt(process.env.UPLOAD_MAX_FILE_SIZE_MB ?? '5', 10),
+  },
+  googleGeocoding: {
+    apiKey: process.env.GOOGLE_GEOCODING_API_KEY || undefined,
+  },
+  googleRoutes: {
+    apiKey: process.env.GOOGLE_ROUTES_API_KEY || undefined,
+  },
+  moyasar: {
+    secretKey: process.env.MOYASAR_SECRET_KEY || undefined,
+    publishableKey: process.env.MOYASAR_PUBLISHABLE_KEY || undefined,
+    webhookSecret: process.env.MOYASAR_WEBHOOK_SECRET || undefined,
   },
 });

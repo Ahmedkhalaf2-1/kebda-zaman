@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { MenuItem, MenuItemBadge, Prisma } from '@prisma/client';
 
 /**
  * Public catalog shape. Field-picked explicitly (never spread) so Prisma's
@@ -31,6 +31,14 @@ export interface AddonGroupResponseDto {
   addons: AddonResponseDto[];
 }
 
+/** Rating aggregate attached to a menu item's public response — never per-item queried, see CatalogService/ReviewsService.getMenuItemRatingAggregates. */
+export interface MenuItemRatingSummary {
+  averageRating: number;
+  reviewCount: number;
+}
+
+const ZERO_RATING_SUMMARY: MenuItemRatingSummary = { averageRating: 0, reviewCount: 0 };
+
 export interface MenuItemResponseDto {
   id: string;
   categoryId: string;
@@ -39,11 +47,21 @@ export interface MenuItemResponseDto {
   descriptionAr: string;
   descriptionEn: string;
   basePrice: number;
+  // The actual charged price when set (PricingService.resolveMenuItemPrice) —
+  // null means no discount, basePrice is charged as-is. Distinct from
+  // compareAtPrice (cosmetic "was" price, never read by pricing/financial code).
+  salePrice: number | null;
+  calories: number | null;
+  compareAtPrice: number | null;
   imageUrl: string | null;
   isAvailable: boolean;
   isPopular: boolean;
+  badge: MenuItemBadge | null;
   variants: ItemVariantResponseDto[];
   addonGroups: AddonGroupResponseDto[];
+  /** Aggregate only — individual written reviews/comments are never exposed on a public catalog response. */
+  averageRating: number;
+  reviewCount: number;
 }
 
 /** Only active variants / available addons are exposed publicly (catalog + cart hydration). */
@@ -70,7 +88,10 @@ export type MenuItemWithRelations = Prisma.MenuItemGetPayload<{
   };
 }>;
 
-export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemResponseDto {
+export function toMenuItemResponse(
+  item: MenuItemWithRelations,
+  ratingSummary: MenuItemRatingSummary = ZERO_RATING_SUMMARY,
+): MenuItemResponseDto {
   return {
     id: item.id,
     categoryId: item.categoryId,
@@ -79,9 +100,13 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
+    calories: item.calories,
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,
     isAvailable: item.isAvailable,
     isPopular: item.isPopular,
+    badge: item.badge,
     variants: item.variants.map((variant) => ({
       id: variant.id,
       nameAr: variant.nameAr,
@@ -103,6 +128,65 @@ export function toMenuItemResponse(item: MenuItemWithRelations): MenuItemRespons
         price: addon.price.toNumber(),
       })),
     })),
+    averageRating: ratingSummary.averageRating,
+    reviewCount: ratingSummary.reviewCount,
+  };
+}
+
+/**
+ * Focused "Often Ordered With" summary — deliberately excludes variants,
+ * addonGroups, recommendationItemIds, and oftenOrderedWith itself (no
+ * recursive nesting). Public detail endpoint only (plan VO3 Menu §8).
+ */
+export interface MenuItemSummaryResponseDto {
+  id: string;
+  categoryId: string;
+  nameAr: string;
+  nameEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  basePrice: number;
+  salePrice: number | null;
+  compareAtPrice: number | null;
+  calories: number | null;
+  badge: MenuItemBadge | null;
+  imageUrl: string | null;
+  isAvailable: boolean;
+  isPopular: boolean;
+}
+
+export function toMenuItemSummaryResponse(item: MenuItem): MenuItemSummaryResponseDto {
+  return {
+    id: item.id,
+    categoryId: item.categoryId,
+    nameAr: item.nameAr,
+    nameEn: item.nameEn,
+    descriptionAr: item.descriptionAr,
+    descriptionEn: item.descriptionEn,
+    basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
+    calories: item.calories,
+    badge: item.badge,
+    imageUrl: item.imageUrl,
+    isAvailable: item.isAvailable,
+    isPopular: item.isPopular,
+  };
+}
+
+/** GET /menu/items/:id only — list/search/featured stay on MenuItemResponseDto. */
+export interface MenuItemDetailResponseDto extends MenuItemResponseDto {
+  oftenOrderedWith: MenuItemSummaryResponseDto[];
+}
+
+export function toMenuItemDetailResponse(
+  item: MenuItemWithRelations,
+  oftenOrderedWithItems: MenuItem[],
+  ratingSummary: MenuItemRatingSummary = ZERO_RATING_SUMMARY,
+): MenuItemDetailResponseDto {
+  return {
+    ...toMenuItemResponse(item, ratingSummary),
+    oftenOrderedWith: oftenOrderedWithItems.map(toMenuItemSummaryResponse),
   };
 }
 
@@ -134,11 +218,13 @@ export interface AdminAddonGroupResponseDto {
 
 export interface AdminMenuItemResponseDto extends Omit<
   MenuItemResponseDto,
-  'variants' | 'addonGroups'
+  'variants' | 'addonGroups' | 'averageRating' | 'reviewCount'
 > {
   displayOrder: number | null;
   variants: AdminItemVariantResponseDto[];
   addonGroups: AdminAddonGroupResponseDto[];
+  /** Outgoing "Often Ordered With" target IDs only, ordered by displayOrder — never expanded. */
+  recommendationItemIds: string[];
 }
 
 export const ADMIN_MENU_ITEM_INCLUDE = {
@@ -147,9 +233,19 @@ export const ADMIN_MENU_ITEM_INCLUDE = {
     orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }],
     include: { addons: { orderBy: [{ displayOrder: 'asc' }, { createdAt: 'asc' }] } },
   },
+  recommendations: {
+    orderBy: { displayOrder: 'asc' },
+    select: { recommendedMenuItemId: true },
+  },
 } satisfies Prisma.MenuItemInclude;
 
-export type AdminMenuItemWithRelations = MenuItemWithRelations;
+export type AdminMenuItemWithRelations = Prisma.MenuItemGetPayload<{
+  include: {
+    variants: true;
+    addonGroups: { include: { addons: true } };
+    recommendations: { select: { recommendedMenuItemId: true } };
+  };
+}>;
 
 export function toAdminMenuItemResponse(
   item: AdminMenuItemWithRelations,
@@ -162,10 +258,15 @@ export function toAdminMenuItemResponse(
     descriptionAr: item.descriptionAr,
     descriptionEn: item.descriptionEn,
     basePrice: item.basePrice.toNumber(),
+    salePrice: item.salePrice === null ? null : item.salePrice.toNumber(),
+    calories: item.calories,
+    compareAtPrice: item.compareAtPrice === null ? null : item.compareAtPrice.toNumber(),
     imageUrl: item.imageUrl,
     isAvailable: item.isAvailable,
     isPopular: item.isPopular,
+    badge: item.badge,
     displayOrder: item.displayOrder,
+    recommendationItemIds: item.recommendations.map((r) => r.recommendedMenuItemId),
     variants: item.variants.map((variant) => ({
       id: variant.id,
       nameAr: variant.nameAr,

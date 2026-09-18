@@ -22,15 +22,22 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
   const cleanupCampaignIds: string[] = [];
   const cleanupTokens: string[] = [];
   let originalSettings: {
-    restaurantName: string;
+    restaurantNameAr: string;
+    restaurantNameEn: string;
+    logoUrl: string | null;
     phone: string;
-    addressText: string;
+    addressAr: string;
+    addressEn: string;
     taxRatePercent: number;
     deliveryFee: number;
     minOrderAmount: number;
     currency: string;
     workingHours: Prisma.InputJsonValue;
+    timezone: string;
     isMaintenanceMode: boolean;
+    acceptingOrders: boolean;
+    closedMessageAr: string | null;
+    closedMessageEn: string | null;
   };
 
   async function registerCustomer() {
@@ -63,6 +70,23 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
     );
   }
 
+  async function registerCashier() {
+    const registered = await authService.register(
+      {
+        name: 'AP Cashier',
+        email: `ap-cashier-${randomUUID()}@phase7c.local`,
+        password: 'correcthorsebattery',
+      },
+      {},
+    );
+    cleanupUserIds.push(registered.user.id);
+    await prisma.user.update({ where: { id: registered.user.id }, data: { role: 'CASHIER' } });
+    return authService.login(
+      { email: registered.user.email as string, password: 'correcthorsebattery' },
+      {},
+    );
+  }
+
   function newPromoPayload(overrides: Record<string, unknown> = {}) {
     return {
       code: `PROMO${randomUUID().slice(0, 8).toUpperCase()}`,
@@ -70,6 +94,15 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       value: 10,
       ...overrides,
     };
+  }
+
+  function weeklyHours(opts: { openTime: string; closeTime: string }) {
+    return Array.from({ length: 7 }, (_, dayOfWeek) => ({
+      dayOfWeek,
+      isOpen: true,
+      openTime: opts.openTime,
+      closeTime: opts.closeTime,
+    }));
   }
 
   function newCampaignPayload(overrides: Record<string, unknown> = {}) {
@@ -112,15 +145,22 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       where: { singleton: true },
     });
     originalSettings = {
-      restaurantName: settings.restaurantName,
+      restaurantNameAr: settings.restaurantNameAr,
+      restaurantNameEn: settings.restaurantNameEn,
+      logoUrl: settings.logoUrl,
       phone: settings.phone,
-      addressText: settings.addressText,
+      addressAr: settings.addressAr,
+      addressEn: settings.addressEn,
       taxRatePercent: settings.taxRatePercent.toNumber(),
       deliveryFee: settings.deliveryFee.toNumber(),
       minOrderAmount: settings.minOrderAmount.toNumber(),
       currency: settings.currency,
       workingHours: settings.workingHours as Prisma.InputJsonValue,
+      timezone: settings.timezone,
       isMaintenanceMode: settings.isMaintenanceMode,
+      acceptingOrders: settings.acceptingOrders,
+      closedMessageAr: settings.closedMessageAr,
+      closedMessageEn: settings.closedMessageEn,
     };
   });
 
@@ -177,6 +217,26 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
     it('rejects an unauthenticated caller with 401', async () => {
       const res = await request(app.getHttpServer()).get('/api/v1/admin/promos');
       expect(res.status).toBe(401);
+    });
+
+    it('rejects a CASHIER on notification broadcast routes (403, not just hidden in the UI)', async () => {
+      const cashier = await registerCashier();
+      const auth = `Bearer ${cashier.accessToken}`;
+
+      const sendRes = await request(app.getHttpServer())
+        .post('/api/v1/admin/notifications/send')
+        .set('Authorization', auth)
+        .send(newCampaignPayload());
+      const scheduleRes = await request(app.getHttpServer())
+        .post('/api/v1/admin/notifications/schedule')
+        .set('Authorization', auth)
+        .send(newCampaignPayload({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }));
+      const campaignsRes = await request(app.getHttpServer())
+        .get('/api/v1/admin/notifications/campaigns')
+        .set('Authorization', auth);
+
+      [sendRes, scheduleRes, campaignsRes].forEach((res) => expect(res.status).toBe(403));
+      expect(sendToTokens).not.toHaveBeenCalled();
     });
   });
 
@@ -307,15 +367,19 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       expect(getRes.body.currency).toBe(originalSettings.currency);
 
       const newPayload = {
-        restaurantName: 'Kebda Zaman Test',
+        restaurantNameAr: 'كبدة زمان تجريبي',
+        restaurantNameEn: 'Kebda Zaman Test',
         phone: '+20111111111',
-        addressText: 'Giza, Egypt',
+        addressAr: 'الجيزة، مصر',
+        addressEn: 'Giza, Egypt',
         taxRatePercent: 12,
         deliveryFee: 18,
         minOrderAmount: 40,
         currency: 'EGP',
-        workingHours: { open: '09:00', close: '23:00' },
+        workingHours: weeklyHours({ openTime: '09:00', closeTime: '23:00' }),
+        timezone: 'Africa/Cairo',
         isMaintenanceMode: true,
+        acceptingOrders: true,
       };
       const putRes = await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
@@ -351,7 +415,19 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       const res = await request(app.getHttpServer())
         .put('/api/v1/admin/settings')
         .set('Authorization', `Bearer ${admin.accessToken}`)
-        .send({ ...originalSettings, workingHours: { open: '10am', close: '23:00' } });
+        .send({ ...originalSettings, workingHours: weeklyHours({ openTime: '10am', closeTime: '23:00' }) });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a working-hours array missing a dayOfWeek with 400', async () => {
+      const admin = await registerAdmin();
+      const res = await request(app.getHttpServer())
+        .put('/api/v1/admin/settings')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({
+          ...originalSettings,
+          workingHours: weeklyHours({ openTime: '10:00', closeTime: '23:00' }).slice(0, 6),
+        });
       expect(res.status).toBe(400);
     });
 
@@ -368,6 +444,23 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
 
   // ===========================================================================
   describe('Notification campaigns: immediate send', () => {
+    // These tests assert exact totalRecipients counts from the default ALL
+    // audience, which resolves every active DeviceToken in the DB — so a
+    // token/campaign left behind by one test would inflate the next test's
+    // count. The shared cleanupTokens/cleanupCampaignIds arrays are normally
+    // only flushed once in the file-level afterAll, so drain them after each
+    // test here instead of waiting for that.
+    afterEach(async () => {
+      if (cleanupTokens.length > 0) {
+        await prisma.deviceToken.deleteMany({ where: { token: { in: cleanupTokens } } });
+        cleanupTokens.length = 0;
+      }
+      if (cleanupCampaignIds.length > 0) {
+        await prisma.notificationCampaign.deleteMany({ where: { id: { in: cleanupCampaignIds } } });
+        cleanupCampaignIds.length = 0;
+      }
+    });
+
     it('persists a SENT campaign and forwards the AppNotificationPayload contract to FCM', async () => {
       const admin = await registerAdmin();
       const customer = await registerCustomer();
@@ -387,6 +480,8 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       expect(res.body.status).toBe('SENT');
       expect(res.body.totalRecipients).toBe(1);
       expect(res.body.deliveredCount).toBe(1);
+      expect(res.body.deliveredCount).toBe(res.body.totalRecipients);
+      expect(res.body.sentAt).not.toBeNull();
       cleanupCampaignIds.push(res.body.id);
 
       expect(sendToTokens).toHaveBeenCalledTimes(1);
@@ -402,8 +497,33 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
       });
     });
 
-    it('persists FAILED cleanly (does not crash the request) when FCM send throws', async () => {
+    it('keeps zero-recipient campaigns SENT (nothing existed to fail, so this is not a delivery failure)', async () => {
       const admin = await registerAdmin();
+      // No device tokens registered anywhere — resolveAudienceTokens() returns [].
+      sendToTokens.mockResolvedValueOnce({ successCount: 0, failureCount: 0, invalidTokens: [] });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/notifications/send')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCampaignPayload());
+
+      expect(res.status).toBe(201);
+      expect(res.body.status).toBe('SENT');
+      expect(res.body.totalRecipients).toBe(0);
+      expect(res.body.deliveredCount).toBe(0);
+      expect(res.body.sentAt).not.toBeNull();
+      cleanupCampaignIds.push(res.body.id);
+    });
+
+    it('persists FAILED cleanly (does not crash the request) when FCM send throws, preserving ' +
+      'the already-resolved recipient count', async () => {
+      const admin = await registerAdmin();
+      const customer = await registerCustomer();
+      const token = `fcm-${randomUUID()}`;
+      cleanupTokens.push(token);
+      await prisma.deviceToken.create({
+        data: { token, userId: customer.user.id, platform: 'ANDROID', lastSeenAt: new Date() },
+      });
       sendToTokens.mockRejectedValueOnce(new Error('FCM unavailable'));
 
       const res = await request(app.getHttpServer())
@@ -413,12 +533,122 @@ describe('Admin Platform: Promos, Settings, Notification Campaigns (integration)
 
       expect(res.status).toBe(201);
       expect(res.body.status).toBe('FAILED');
+      // Not left stuck as SENDING, and the throw doesn't fabricate a delivery.
+      expect(res.body.status).not.toBe('SENDING');
+      expect(res.body.totalRecipients).toBe(1);
+      expect(res.body.deliveredCount).toBe(0);
+      expect(res.body.sentAt).toBeNull();
       cleanupCampaignIds.push(res.body.id);
 
       const row = await prisma.notificationCampaign.findUniqueOrThrow({
         where: { id: res.body.id },
       });
       expect(row.status).toBe('FAILED');
+      expect(row.sentAt).toBeNull();
+      expect(row.totalRecipients).toBe(1);
+      expect(row.deliveredCount).toBe(0);
+    });
+
+    it('records FAILED (never SENT) when there are recipients but Firebase delivers to none — ' +
+      'e.g. Firebase unconfigured/disabled in production', async () => {
+      const admin = await registerAdmin();
+      const customer = await registerCustomer();
+      const token = `fcm-${randomUUID()}`;
+      cleanupTokens.push(token);
+      await prisma.deviceToken.create({
+        data: { token, userId: customer.user.id, platform: 'ANDROID', lastSeenAt: new Date() },
+      });
+      // This is exactly the shape NotificationsService.sendToTokens returns
+      // when Firebase Admin isn't configured (dispatch() short-circuits
+      // before calling FCM): every resolved token counted as a failure.
+      sendToTokens.mockResolvedValueOnce({ successCount: 0, failureCount: 1, invalidTokens: [] });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/notifications/send')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCampaignPayload());
+
+      expect(res.status).toBe(201);
+      expect(res.body.status).toBe('FAILED');
+      expect(res.body.totalRecipients).toBe(1);
+      expect(res.body.deliveredCount).toBe(0);
+      expect(res.body.sentAt).toBeNull();
+      cleanupCampaignIds.push(res.body.id);
+
+      const row = await prisma.notificationCampaign.findUniqueOrThrow({
+        where: { id: res.body.id },
+      });
+      expect(row.status).toBe('FAILED');
+      expect(row.sentAt).toBeNull();
+    });
+
+    it('records a partial failure honestly: status SENT but deliveredCount below totalRecipients ' +
+      '(never claims full success)', async () => {
+      const admin = await registerAdmin();
+      const customer = await registerCustomer();
+      const tokenA = `fcm-${randomUUID()}`;
+      const tokenB = `fcm-${randomUUID()}`;
+      cleanupTokens.push(tokenA, tokenB);
+      await prisma.deviceToken.createMany({
+        data: [
+          { token: tokenA, userId: customer.user.id, platform: 'ANDROID', lastSeenAt: new Date() },
+          { token: tokenB, userId: customer.user.id, platform: 'IOS', lastSeenAt: new Date() },
+        ],
+      });
+      sendToTokens.mockResolvedValueOnce({
+        successCount: 1,
+        failureCount: 1,
+        invalidTokens: [tokenB],
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/v1/admin/notifications/send')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send(newCampaignPayload());
+
+      expect(res.status).toBe(201);
+      // At least one delivery succeeded, so SENT is accurate — but the
+      // recorded counts must not overstate reach.
+      expect(res.body.status).toBe('SENT');
+      expect(res.body.totalRecipients).toBe(2);
+      expect(res.body.deliveredCount).toBe(1);
+      expect(res.body.deliveredCount).toBeLessThan(res.body.totalRecipients);
+      cleanupCampaignIds.push(res.body.id);
+    });
+  });
+
+  // ===========================================================================
+  describe('Provider status: GET /admin/notifications/status', () => {
+    it('reports Firebase as unconfigured in this test env, without leaking any credential material', async () => {
+      const admin = await registerAdmin();
+      const res = await request(app.getHttpServer())
+        .get('/api/v1/admin/notifications/status')
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+
+      expect(res.status).toBe(200);
+      // Only the safe boolean shape — nothing resembling a credential.
+      expect(res.body).toEqual({ firebase: { configured: expect.any(Boolean), enabled: expect.any(Boolean) } });
+      const serialized = JSON.stringify(res.body).toLowerCase();
+      ['private_key', 'privatekey', 'client_email', 'service_account', 'token', 'secret'].forEach(
+        (needle) => expect(serialized).not.toContain(needle),
+      );
+    });
+
+    it('rejects a CUSTOMER and a CASHIER (403) and an unauthenticated caller (401)', async () => {
+      const customer = await registerCustomer();
+      const cashier = await registerCashier();
+
+      const customerRes = await request(app.getHttpServer())
+        .get('/api/v1/admin/notifications/status')
+        .set('Authorization', `Bearer ${customer.accessToken}`);
+      const cashierRes = await request(app.getHttpServer())
+        .get('/api/v1/admin/notifications/status')
+        .set('Authorization', `Bearer ${cashier.accessToken}`);
+      const anonRes = await request(app.getHttpServer()).get('/api/v1/admin/notifications/status');
+
+      expect(customerRes.status).toBe(403);
+      expect(cashierRes.status).toBe(403);
+      expect(anonRes.status).toBe(401);
     });
   });
 

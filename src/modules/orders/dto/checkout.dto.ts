@@ -2,9 +2,12 @@ import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { DeliveryMethod, PaymentMethod } from '@prisma/client';
@@ -39,6 +42,25 @@ export class DeliveryAddressDto {
   @IsNotEmpty()
   @MaxLength(100)
   city!: string;
+
+  // Exact pin the customer dropped at checkout (plan VO2.3). Optional at the
+  // DTO level (matches DeliveryAddressDto's other optional fields), but
+  // OrdersService.checkout enforces both are present for DELIVERY orders
+  // (DELIVERY_COORDINATES_REQUIRED) — distance-based pricing cannot run
+  // without them. Snapshotted verbatim onto the order (never derived from
+  // the text address, never defaulted to 0,0). IsNumber() already rejects
+  // NaN/Infinity by default.
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
 }
 
 /** No monetary fields — the server recomputes everything (plan §4.11/§6). */
