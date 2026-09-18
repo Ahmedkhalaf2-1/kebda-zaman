@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -182,6 +183,7 @@ describe('OrdersService.checkout — distance-based delivery pricing', () => {
       {} as PaymentsService,
       {} as LoyaltyService,
       adminNotificationsService as unknown as AdminNotificationsService,
+      {} as ConfigService,
     );
   });
 

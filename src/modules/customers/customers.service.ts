@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
@@ -13,9 +14,20 @@ import { UpdateCustomerStatusDto } from './dto/update-customer-status.dto';
 
 const RECENT_ORDERS_LIMIT = 10;
 
+export interface CustomerResetPreviewDto {
+  loyaltyAccounts: number;
+  pointsCleared: number;
+  transactions: number;
+  reviews: number;
+  feedback: number;
+}
+
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   async list(query: ListCustomersDto): Promise<CustomerListItemDto[]> {
     const page = query.page ?? 1;
@@ -75,6 +87,61 @@ export class CustomersService {
       data: { deletedAt: dto.isActive ? null : new Date() },
     });
     return this.getById(id);
+  }
+
+  /** Counts for the admin "wipe customers" confirmation dialog — no changes
+   * made. Scoped to CUSTOMER users only (never STAFF/ADMIN/DRIVER/etc). */
+  async resetPreview(): Promise<CustomerResetPreviewDto> {
+    const customerScope = { user: { role: UserRole.CUSTOMER } };
+    const [loyaltyAgg, transactions, reviews, feedback] = await Promise.all([
+      this.prisma.loyaltyAccount.aggregate({
+        where: customerScope,
+        _count: { _all: true },
+        _sum: { pointsBalance: true },
+      }),
+      this.prisma.loyaltyTransaction.count({ where: { account: customerScope } }),
+      this.prisma.itemReview.count({ where: customerScope }),
+      this.prisma.orderFeedback.count({ where: customerScope }),
+    ]);
+    return {
+      loyaltyAccounts: loyaltyAgg._count._all,
+      pointsCleared: loyaltyAgg._sum.pointsBalance ?? 0,
+      transactions,
+      reviews,
+      feedback,
+    };
+  }
+
+  /** ADMIN-only, non-production-only (see assertResetAllowed): for every
+   * CUSTOMER, zeroes their loyalty balance (deleting the ledger) and deletes
+   * their item reviews / order feedback. Deliberately keeps the User row —
+   * and therefore the account/login — untouched: accounts/addresses/carts/
+   * device tokens are never part of this action, unlike AuthService's real
+   * account-deletion flow. Independent of OrdersService.adminResetOrders —
+   * this never touches Order rows and can be run with or without it. */
+  async resetCustomerData(): Promise<CustomerResetPreviewDto> {
+    this.assertResetAllowed();
+    const preview = await this.resetPreview();
+    const customerScope = { user: { role: UserRole.CUSTOMER } };
+    await this.prisma.$transaction([
+      this.prisma.loyaltyTransaction.deleteMany({ where: { account: customerScope } }),
+      this.prisma.loyaltyAccount.updateMany({
+        where: customerScope,
+        data: { pointsBalance: 0 },
+      }),
+      this.prisma.itemReview.deleteMany({ where: customerScope }),
+      this.prisma.orderFeedback.deleteMany({ where: customerScope }),
+    ]);
+    return preview;
+  }
+
+  private assertResetAllowed(): void {
+    if (this.config.get<string>('nodeEnv') === 'production') {
+      throw new ForbiddenException({
+        message: 'Data reset is disabled in production',
+        code: 'RESET_DISABLED_IN_PRODUCTION',
+      });
+    }
   }
 
   private async findCustomerOrThrow(id: string) {

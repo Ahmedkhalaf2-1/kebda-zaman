@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Query } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { ListCustomersDto } from './dto/list-customers.dto';
@@ -12,6 +12,22 @@ export class CustomersController {
   @Get()
   list(@Query() query: ListCustomersDto) {
     return this.customersService.list(query);
+  }
+
+  /** Counts only, no changes — for the frontend's "wipe customers"
+   * confirmation dialog. Declared before the `:id` route below so it isn't
+   * swallowed by ParseUUIDPipe. */
+  @Get('reset-preview')
+  resetPreview() {
+    return this.customersService.resetPreview();
+  }
+
+  /** Keeps every customer's account/login intact — only zeroes loyalty
+   * points and deletes reviews. Refuses to run once NODE_ENV=production
+   * (see CustomersService.assertResetAllowed). */
+  @Delete('reset')
+  reset() {
+    return this.customersService.resetCustomerData();
   }
 
   @Get(':id')

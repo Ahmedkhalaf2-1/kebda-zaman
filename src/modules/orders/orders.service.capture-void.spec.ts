@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -103,6 +104,7 @@ describe('OrdersService.updateOrderStatus — capture/void gating', () => {
       paymentsService as unknown as PaymentsService,
       loyaltyService as unknown as LoyaltyService,
       {} as AdminNotificationsService,
+      {} as ConfigService,
     );
   });
 

@@ -1,5 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -154,6 +155,7 @@ describe('OrdersService.checkout — in-transaction promo re-validation', () => 
       {} as PaymentsService,
       {} as LoyaltyService,
       adminNotificationsService as unknown as AdminNotificationsService,
+      {} as ConfigService,
     );
   });
 

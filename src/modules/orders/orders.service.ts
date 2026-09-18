@@ -1,12 +1,14 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DeliveryMethod, OrderStatus, Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -47,6 +49,14 @@ import { CheckoutDto } from './dto/checkout.dto';
 import { ListOrdersDto } from './dto/list-orders.dto';
 import { AdminListOrdersDto } from './dto/admin-list-orders.dto';
 import { ListDriverOrdersDto } from './dto/list-driver-orders.dto';
+
+export interface OrdersResetPreviewDto {
+  orders: number;
+  items: number;
+  payments: number;
+  reviews: number;
+  feedback: number;
+}
 
 const orderInclude = {
   user: true,
@@ -152,6 +162,7 @@ export class OrdersService {
     private readonly paymentsService: PaymentsService,
     private readonly loyaltyService: LoyaltyService,
     private readonly adminNotificationsService: AdminNotificationsService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -626,6 +637,47 @@ export class OrdersService {
       throw new NotFoundException({ message: 'Order not found', code: 'ORDER_NOT_FOUND' });
     }
     return toAdminOrderResponse(order);
+  }
+
+  /** Counts for the admin "wipe orders" confirmation dialog — no deletion.
+   * Cheap: all indexed counts, no joins. */
+  async adminOrdersResetPreview(): Promise<OrdersResetPreviewDto> {
+    const [orders, items, payments, reviews, feedback] = await Promise.all([
+      this.prisma.order.count(),
+      this.prisma.orderItem.count(),
+      this.prisma.payment.count(),
+      this.prisma.itemReview.count(),
+      this.prisma.orderFeedback.count(),
+    ]);
+    return { orders, items, payments, reviews, feedback };
+  }
+
+  /** ADMIN-only, non-production-only (see assertResetAllowed): permanently
+   * deletes every Order. Deliberately overrides this codebase's usual "never
+   * hard-delete an Order" invariant (see Order's schema doc comment and
+   * AuthService.deleteAccount, which anonymizes rather than deletes) — this
+   * exists only to clear test/demo data before a real launch, which is why
+   * it refuses to run at all once NODE_ENV=production. A single
+   * `order.deleteMany` is enough: every dependent row (items, item reviews,
+   * order feedback, payments, status/driver-assignment history, driver
+   * location) has a DB-level ON DELETE CASCADE back to Order. The one
+   * exception is LoyaltyTransaction.orderId, which is a soft reference (no
+   * FK) and is intentionally left untouched here — clearing loyalty ledgers
+   * is CustomersService.resetCustomerData's job, run independently. */
+  async adminResetOrders(): Promise<OrdersResetPreviewDto> {
+    this.assertResetAllowed();
+    const preview = await this.adminOrdersResetPreview();
+    await this.prisma.order.deleteMany({});
+    return preview;
+  }
+
+  private assertResetAllowed(): void {
+    if (this.config.get<string>('nodeEnv') === 'production') {
+      throw new ForbiddenException({
+        message: 'Data reset is disabled in production',
+        code: 'RESET_DISABLED_IN_PRODUCTION',
+      });
+    }
   }
 
   /** KITCHEN's live queue — only orders actively being cooked (accepted, not yet

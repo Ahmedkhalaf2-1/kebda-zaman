@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -141,6 +142,7 @@ describe('OrdersService — driver assignment + delivery actions', () => {
       paymentsService as unknown as PaymentsService,
       loyaltyService as unknown as LoyaltyService,
       {} as AdminNotificationsService,
+      {} as ConfigService,
     );
   }
 

@@ -32,6 +32,23 @@ export class AdminOrdersController {
     return this.ordersService.adminListOrders(query);
   }
 
+  /** Counts only, no deletion — for the frontend's "wipe orders" confirmation
+   * dialog. Declared before the `:id` route below so it isn't swallowed by
+   * ParseUUIDPipe. */
+  @Get('reset-preview')
+  ordersResetPreview() {
+    return this.ordersService.adminOrdersResetPreview();
+  }
+
+  /** ADMIN-only (not CASHIER) — permanently deletes every order. Refuses to
+   * run once NODE_ENV=production (see OrdersService.assertResetAllowed);
+   * this exists to clear test/demo data before launch, not for routine use. */
+  @Roles('ADMIN')
+  @Delete('reset')
+  resetOrders() {
+    return this.ordersService.adminResetOrders();
+  }
+
   @Get(':id')
   getOrder(@Param('id', ParseUUIDPipe) id: string) {
     return this.ordersService.adminGetOrder(id);

@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
@@ -104,6 +105,7 @@ describe('OrdersService.updateOrderStatus — ETA refresh on hand-off', () => {
       } as unknown as PaymentsService,
       { earnForOrder: jest.fn().mockResolvedValue(undefined) } as unknown as LoyaltyService,
       {} as AdminNotificationsService,
+      {} as ConfigService,
     );
   }
 
