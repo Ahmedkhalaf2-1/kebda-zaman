@@ -60,6 +60,21 @@ export interface AppConfig {
     // body (Moyasar puts the shared secret in the JSON body, not a header).
     webhookSecret?: string;
   };
+  email: {
+    // Sending-only Resend API key — server-side only, never exposed to
+    // Flutter, never logged. Unset disables transactional email sending
+    // (e.g. password reset) as a safe no-op — see EmailService.isConfigured.
+    resendApiKey?: string;
+    // Verified Resend sender identity, e.g. "Kebda Zaman <noreply@mail.kebdazaman.cloud>".
+    from?: string;
+  };
+  passwordReset: {
+    // Trusted base URL of the frontend password-reset page. The raw reset
+    // token is appended as a `token` query param server-side — NEVER derived
+    // from the request Host header, NEVER a client-supplied redirect. Unset
+    // disables actually sending the reset email (see AuthService.issuePasswordResetToken).
+    url?: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -104,5 +119,12 @@ export default (): AppConfig => ({
     secretKey: process.env.MOYASAR_SECRET_KEY || undefined,
     publishableKey: process.env.MOYASAR_PUBLISHABLE_KEY || undefined,
     webhookSecret: process.env.MOYASAR_WEBHOOK_SECRET || undefined,
+  },
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY || undefined,
+    from: process.env.EMAIL_FROM || undefined,
+  },
+  passwordReset: {
+    url: process.env.PASSWORD_RESET_URL || undefined,
   },
 });

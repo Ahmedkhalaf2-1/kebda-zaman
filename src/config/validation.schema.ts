@@ -11,6 +11,7 @@ const SECRET_ENV_KEYS = [
   'POSTGRES_PASSWORD',
   'MOYASAR_SECRET_KEY',
   'MOYASAR_WEBHOOK_SECRET',
+  'RESEND_API_KEY',
 ] as const;
 
 export const validationSchema = Joi.object({
@@ -55,6 +56,16 @@ export const validationSchema = Joi.object({
   MOYASAR_SECRET_KEY: Joi.string().allow('').optional(),
   MOYASAR_PUBLISHABLE_KEY: Joi.string().allow('').optional(),
   MOYASAR_WEBHOOK_SECRET: Joi.string().allow('').optional(),
+  // Optional at boot (local/test/CI never need real Resend credentials) —
+  // EmailService logs at 'error' in production when unset, and every
+  // password-reset request still responds generically (it just can't
+  // actually deliver the email), mirroring MOYASAR_SECRET_KEY above.
+  RESEND_API_KEY: Joi.string().allow('').optional(),
+  EMAIL_FROM: Joi.string().allow('').optional(),
+  // Trusted frontend password-reset page base URL — see configuration.ts's
+  // `passwordReset.url` doc comment. Optional at boot; unset just means the
+  // reset email can't be built/sent yet.
+  PASSWORD_RESET_URL: Joi.string().uri().allow('').optional(),
 })
   // Compose also injects POSTGRES_* vars; allow them without failing validation.
   .unknown(true)

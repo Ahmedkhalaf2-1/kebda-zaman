@@ -22,6 +22,8 @@ import { LogoutDto } from './dto/logout.dto';
 import { GuestDto } from './dto/guest.dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
 import { AppleAuthDto } from './dto/apple-auth.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AUTH_THROTTLE } from './auth-throttle.const';
 import { extractRequestMeta } from './request-meta.util';
 
@@ -87,6 +89,28 @@ export class AuthController {
   @Post('refresh')
   refresh(@Body() dto: RefreshDto, @Req() req: Request) {
     return this.authService.refresh(dto.refreshToken, extractRequestMeta(req), dto.deviceToken);
+  }
+
+  // Always responds 200 with the same generic message — see
+  // AuthService.forgotPassword's doc comment for exactly why. Per-IP
+  // throttle is the same class/limit as every other public auth route
+  // (AUTH_THROTTLE) — the real abuse-specific defense is the tighter
+  // per-EMAIL cooldown/cap inside AuthService (PasswordResetThrottleService),
+  // which this route-level throttle only backs up.
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('forgot-password')
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.authService.forgotPassword(dto, extractRequestMeta(req));
+  }
+
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @HttpCode(HttpStatus.OK)
+  @Post('reset-password')
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @HttpCode(HttpStatus.NO_CONTENT)

@@ -5,7 +5,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from './password.service';
 import { TokenService, RequestMeta } from './token.service';
 import { BruteForceService } from './brute-force.service';
+import { PasswordResetThrottleService } from './password-reset-throttle.service';
 import { GoogleAuthService, VerifiedFirebaseIdentity } from './google-auth.service';
+import { EmailService } from '../email/email.service';
+import { ConfigService } from '@nestjs/config';
 
 const META: RequestMeta = { ip: '127.0.0.1', userAgent: 'jest' };
 const APPLE_IDENTITY: VerifiedFirebaseIdentity = {
@@ -59,7 +62,10 @@ describe('AuthService.appleLogin', () => {
       {} as PasswordService,
       tokenService as unknown as TokenService,
       {} as BruteForceService,
+      {} as PasswordResetThrottleService,
       firebaseAuth as unknown as GoogleAuthService,
+      {} as EmailService,
+      {} as ConfigService,
     );
 
     const result = await service.appleLogin({ firebaseIdToken: 'apple-token' }, META);

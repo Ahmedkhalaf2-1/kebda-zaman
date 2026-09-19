@@ -10,7 +10,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 import { BruteForceService } from './brute-force.service';
+import { PasswordResetThrottleService } from './password-reset-throttle.service';
 import { GoogleAuthService } from './google-auth.service';
+import { EmailService } from '../email/email.service';
+import { ConfigService } from '@nestjs/config';
 
 function makeUser(overrides: Partial<User> = {}): User {
   return {
@@ -87,7 +90,10 @@ describe('AuthService.deleteAccount', () => {
       {} as PasswordService,
       {} as TokenService,
       {} as BruteForceService,
+      {} as PasswordResetThrottleService,
       googleAuthService as unknown as GoogleAuthService,
+      {} as EmailService,
+      {} as ConfigService,
     );
   }
 

@@ -1,3 +1,4 @@
+import { randomBytes, createHash } from 'node:crypto';
 import {
   ConflictException,
   ForbiddenException,
@@ -5,18 +6,23 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { OrderStatus, Prisma, User, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toUserResponse, UserResponseDto } from '../../common/mappers/user-response.mapper';
 import { PasswordService } from './password.service';
 import { TokenService, RequestMeta } from './token.service';
 import { BruteForceService } from './brute-force.service';
+import { PasswordResetThrottleService } from './password-reset-throttle.service';
 import { GoogleAuthService, VerifiedFirebaseIdentity } from './google-auth.service';
+import { EmailService } from '../email/email.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { GuestDto } from './dto/guest.dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
 import { AppleAuthDto } from './dto/apple-auth.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 export interface AuthResult {
   user: UserResponseDto;
@@ -52,6 +58,24 @@ const REDACTED_DELIVERY_ADDRESS: Prisma.InputJsonValue = {
   longitude: null,
 };
 
+/** Fixed, not env-configurable — the requirement is exactly 15 minutes. */
+const PASSWORD_RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Same response for an existing, nonexistent, inactive (deletedAt set), and
+ * federated-only (no local passwordHash) account — the whole point is that
+ * none of those cases are distinguishable from the outside. Deliberately
+ * doesn't claim the email was actually sent (it may not have been, e.g. no
+ * account matched, or the provider failed) — only that IF an account is
+ * eligible, a link has been dispatched.
+ */
+const FORGOT_PASSWORD_GENERIC_MESSAGE =
+  'If an account exists for this email, a password reset link has been sent.';
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -61,7 +85,10 @@ export class AuthService {
     private readonly passwordService: PasswordService,
     private readonly tokenService: TokenService,
     private readonly bruteForce: BruteForceService,
+    private readonly passwordResetThrottle: PasswordResetThrottleService,
     private readonly googleAuthService: GoogleAuthService,
+    private readonly emailService: EmailService,
+    private readonly config: ConfigService,
   ) {}
 
   async register(dto: RegisterDto, meta: RequestMeta): Promise<AuthResult> {
@@ -332,6 +359,173 @@ export class AuthService {
           deletedAt: new Date(),
         },
       });
+    });
+  }
+
+  /**
+   * Self-service "forgot password". The credential authority here is this
+   * backend's own `User.passwordHash` — Google/Apple sign-in never touches
+   * it (see resolveFederatedUser). Deliberately returns the exact same
+   * response regardless of whether the email matches an account, that
+   * account is deleted, or that account has no local password at all (a
+   * federated-only sign-in) — this never creates a local password for such
+   * an account, it just silently does nothing for it, same generic response.
+   *
+   * `passwordResetThrottle.assertAllowedAndRecord` is synchronous and runs
+   * BEFORE any `await`, closing the "concurrent requests for the same
+   * email" race named in the requirements — see its own doc comment.
+   */
+  async forgotPassword(dto: ForgotPasswordDto, meta: RequestMeta): Promise<{ message: string }> {
+    this.passwordResetThrottle.assertAllowedAndRecord(dto.email);
+
+    // Exact-match, same as `authenticate()` — this codebase's login is
+    // case-sensitive on email today (no `mode: 'insensitive'`), so this
+    // stays consistent with it rather than "fixing" that separately.
+    const user = await this.prisma.user.findFirst({
+      where: { email: dto.email, deletedAt: null },
+    });
+
+    if (user && user.passwordHash && user.email) {
+      await this.issuePasswordResetToken(user as User & { email: string }, meta);
+    }
+
+    return { message: FORGOT_PASSWORD_GENERIC_MESSAGE };
+  }
+
+  private async issuePasswordResetToken(
+    user: User & { email: string },
+    meta: RequestMeta,
+  ): Promise<void> {
+    const rawToken = randomBytes(32).toString('base64url'); // 256 bits of entropy
+    const tokenHash = sha256(rawToken);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS);
+
+    await this.prisma.$transaction([
+      // Only one LIVE token per user at a time — an earlier still-valid
+      // link (from a previous forgot-password call) stops working once a
+      // newer one is issued.
+      this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }),
+      this.prisma.passwordResetToken.create({
+        data: { userId: user.id, tokenHash, expiresAt, requestIp: meta.ip },
+      }),
+    ]);
+
+    const resetUrl = this.config.get<string>('passwordReset.url');
+    if (!resetUrl) {
+      this.logger.warn(
+        'PASSWORD_RESET_URL is not configured — password reset token created but no email can be sent',
+      );
+      return;
+    }
+    const resetLink = `${resetUrl}?token=${rawToken}`;
+
+    try {
+      await this.emailService.sendPasswordResetEmail({
+        to: user.email,
+        name: user.fullName,
+        locale: user.locale,
+        resetLink,
+      });
+    } catch (error) {
+      // Never surfaced to the caller — forgotPassword's response stays
+      // generic regardless of provider outcome (task requirement: never
+      // claim delivery succeeded, never expose account existence via a
+      // provider failure). Logged for operator visibility only; never logs
+      // the token, the link, or the recipient — see EmailService's own rule.
+      this.logger.warn(
+        `Password reset email failed to send: ${error instanceof Error ? error.name : 'unknown error'}`,
+      );
+    }
+  }
+
+  /**
+   * Consumes a password-reset token. Everything below runs in ONE
+   * transaction: the atomic `updateMany` claim (`usedAt: null` in the WHERE
+   * clause) is what actually guarantees "concurrent submissions with the
+   * same token permit only one success" — two racing transactions can't both
+   * match that row; Postgres serializes the conflicting UPDATEs and the
+   * loser's `updateMany` matches zero rows. The `deletedAt`/`passwordHash`
+   * re-check below the claim guards the rare case where the account stopped
+   * being eligible between the forgot-password call and this one; the token
+   * is still burned either way (still single-use), it just doesn't change
+   * the password.
+   *
+   * Deliberately does NOT re-null `deletedAt` (never reactivates a disabled
+   * account), never touches `role`, and never issues tokens/logs the user in
+   * — the response carries no session, matching every other requirement here.
+   */
+  async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+    const tokenHash = sha256(dto.token);
+    const now = new Date();
+
+    return this.prisma.$transaction(async (tx) => {
+      const claim = await tx.passwordResetToken.updateMany({
+        where: { tokenHash, usedAt: null, expiresAt: { gt: now } },
+        data: { usedAt: now },
+      });
+
+      if (claim.count !== 1) {
+        const existing = await tx.passwordResetToken.findUnique({ where: { tokenHash } });
+        if (!existing) {
+          throw new UnauthorizedException({
+            message: 'Invalid reset token',
+            code: 'INVALID_RESET_TOKEN',
+          });
+        }
+        if (existing.usedAt) {
+          throw new UnauthorizedException({
+            message: 'This reset link has already been used',
+            code: 'RESET_TOKEN_ALREADY_USED',
+          });
+        }
+        throw new UnauthorizedException({
+          message: 'This reset link has expired',
+          code: 'RESET_TOKEN_EXPIRED',
+        });
+      }
+
+      const claimed = await tx.passwordResetToken.findUniqueOrThrow({ where: { tokenHash } });
+      const user = await tx.user.findUnique({ where: { id: claimed.userId } });
+      if (!user || user.deletedAt || !user.passwordHash) {
+        // Same generic code as an unknown token — the token is already
+        // burned above either way, and this never reveals *why* it failed.
+        throw new UnauthorizedException({
+          message: 'Invalid reset token',
+          code: 'INVALID_RESET_TOKEN',
+        });
+      }
+
+      const passwordHash = await this.passwordService.hash(dto.password);
+
+      await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
+
+      // Single-use extends to "every other live token for this user", not
+      // just the one just consumed (e.g. from an earlier forgot-password
+      // call that's still within its 15-minute window).
+      await tx.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: now },
+      });
+
+      // Revoke every refresh-token session immediately — inlines the same
+      // update TokenService.revokeAllForUser does, against `tx` (not
+      // `this.prisma`) so it commits atomically with the password change,
+      // per the task's "atomically ... revoke refresh sessions" requirement.
+      // Outstanding ACCESS tokens are not force-revoked: this codebase
+      // deliberately keeps JwtAccessGuard stateless/DB-free on every request
+      // (see ActiveDriverGuard's doc comment — the same tradeoff was already
+      // made once, for account deactivation, and rejected for cost reasons).
+      // A stolen access token therefore keeps working for up to its
+      // remaining TTL (JWT_ACCESS_TTL, 15 minutes by default) after a reset,
+      // but can never be refreshed again — see PASSWORD_RESET_API_CONTRACT.md.
+      await tx.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: now },
+      });
+
+      return {
+        message: 'Your password has been reset. Please log in again with your new password.',
+      };
     });
   }
 }

@@ -140,6 +140,7 @@ model User {
   deletedAt           DateTime?
 
   refreshTokens               RefreshToken[]
+  passwordResetTokens         PasswordResetToken[]
   orders                      Order[]
   deviceTokens                DeviceToken[]
   /// One active cart per user (Cart.userId is unique) — guest carts have userId = null.
@@ -182,6 +183,28 @@ model RefreshToken {
 
   @@index([userId])
   @@index([familyId])
+}
+
+/// Email-based password recovery (self-service "forgot password"). Only the
+/// SHA-256 hash of the opaque, high-entropy raw token is ever persisted —
+/// same convention as RefreshToken.tokenHash. `usedAt` makes a row single-use
+/// (set the moment it's consumed, or when superseded/invalidated by a later
+/// request) and doubles as the "already used" signal distinct from expiry.
+/// Never issued for an account with no local `passwordHash` (federated-only
+/// sign-in) — see AuthService.forgotPassword.
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  // Best-effort audit context only — never used for auth decisions.
+  requestIp String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------

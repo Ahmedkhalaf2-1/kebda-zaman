@@ -9,7 +9,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from './password.service';
 import { TokenService, RequestMeta } from './token.service';
 import { BruteForceService } from './brute-force.service';
+import { PasswordResetThrottleService } from './password-reset-throttle.service';
 import { GoogleAuthService } from './google-auth.service';
+import { EmailService } from '../email/email.service';
+import { ConfigService } from '@nestjs/config';
 
 const META: RequestMeta = { ip: '127.0.0.1', userAgent: 'jest' };
 
@@ -41,7 +44,10 @@ describe('AuthService.refresh — device deactivation on rejected session refres
       {} as PasswordService,
       tokenService as unknown as TokenService,
       {} as BruteForceService,
+      {} as PasswordResetThrottleService,
       {} as GoogleAuthService,
+      {} as EmailService,
+      {} as ConfigService,
     );
   }
 
@@ -150,9 +156,9 @@ describe('AuthService.refresh — device deactivation on rejected session refres
     tokenService.rotateRefreshToken.mockRejectedValue(expiredError);
     const service = makeService();
 
-    await expect(
-      service.refresh('raw-refresh', META, 'device-this-one'),
-    ).rejects.toBe(expiredError);
+    await expect(service.refresh('raw-refresh', META, 'device-this-one')).rejects.toBe(
+      expiredError,
+    );
 
     expect(prisma.deviceToken.updateMany).toHaveBeenCalledTimes(1);
     const call = prisma.deviceToken.updateMany.mock.calls[0][0];
@@ -172,9 +178,7 @@ describe('AuthService.refresh — device deactivation on rejected session refres
     const rawRefreshToken = 'super-secret-refresh-token-value';
     const rawDeviceToken = 'super-secret-device-token-value';
 
-    await expect(
-      service.refresh(rawRefreshToken, META, rawDeviceToken),
-    ).rejects.toBe(expiredError);
+    await expect(service.refresh(rawRefreshToken, META, rawDeviceToken)).rejects.toBe(expiredError);
 
     for (const call of warnSpy.mock.calls) {
       for (const arg of call) {
